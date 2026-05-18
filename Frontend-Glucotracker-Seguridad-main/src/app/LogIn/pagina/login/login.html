@@ -1,0 +1,300 @@
+<section class="login-layout">
+  <!-- Panel izquierdo con botones de registro -->
+  <div class="panel panel--left">
+    <div class="left-content">
+      <h1 class="brand">GlucoTracker</h1>
+      
+      <div class="registration-buttons">
+        <button class="btn-register btn-register--paciente" (click)="irARegistroPaciente()">
+          Solicita Acceso
+        </button>
+        
+       <!--  <button class="btn-register btn-register--medico" (click)="irARegistroMedico()">
+          Registrate como MÉDICO
+        </button>-->
+      </div>
+    </div>
+  </div>
+
+  <!-- Panel derecho con formulario de login -->
+  <div class="panel panel--right">
+    <div class="card">
+      <h2 class="login-title">Inicia Sesión</h2>
+
+      <form [formGroup]="form" (ngSubmit)="submit()" aria-label="Formulario de inicio de sesión">
+        <label class="field">
+          <span class="label-text">Usuario</span>
+          <input
+            type="text"
+            formControlName="usuario"
+            placeholder="Ingresa tu usuario"
+            [class.invalid]="f.usuario.touched && f.usuario.invalid"
+            autocomplete="username" />
+          <small *ngIf="f.usuario.touched && f.usuario.hasError('required')">Usuario requerido</small>
+        </label>
+
+        <label class="field">
+        <span class="label-text">Contraseña</span>
+
+        <div class="password-wrapper">
+          <input
+            [type]="showPassword() ? 'text' : 'password'"
+            formControlName="contrasena"
+            placeholder="Ingresa tu contraseña"
+            [class.invalid]="f.contrasena.touched && f.contrasena.invalid"
+            autocomplete="current-password" />
+
+          <button
+            type="button"
+            class="toggle-password"
+            (click)="togglePassword()"
+            tabindex="-1"
+            aria-label="Mostrar u ocultar contraseña">
+
+            <svg *ngIf="!showPassword()" xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M12 5C7 5 3 9 3 12s4 7 9 7 9-4 9-7-4-7-9-7Z" stroke="currentColor" stroke-width="2"/>
+              <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+            </svg>
+
+            <svg *ngIf="showPassword()" xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M3 3l18 18" stroke="currentColor" stroke-width="2"/>
+              <path d="M10.5 10.5A3 3 0 0 0 13.5 13.5" stroke="currentColor" stroke-width="2"/>
+            </svg>
+
+          </button>
+        </div>
+
+        <small *ngIf="f.contrasena.touched && f.contrasena.hasError('required')">
+          Contraseña requerida
+        </small>
+      </label>
+
+        <button class="btn-login" type="submit" [disabled]="!canSubmit()">
+          {{ loading() ? 'Ingresando…' : buttonText() }}
+        </button>
+
+        <button
+          type="button"
+          class="forgot-password"
+          (click)="forgotPassword()">
+          ¿Olvidaste tu contraseña?
+        </button>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- Modal para código de verificación -->
+<div class="modal-overlay" *ngIf="showVerificationModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Verificación en Dos Pasos</h2>
+      <button class="modal-close" (click)="cancelVerification()">×</button>
+    </div>
+    
+    <div class="modal-body">
+      <p class="modal-description">
+        Se ha enviado un código de verificación a tu correo electrónico. Ingrésalo en AQUÍ.
+        <br>
+      
+      <div class="field">
+        <input
+          type="text"
+          placeholder="- - - - - -"
+          maxlength="6"
+          class="verification-input"
+          #codeInput />
+      </div>
+      
+       <div class="modal-actions"><!--
+        <button 
+          type="button" 
+          class="btn-modal btn-modal--secondary"
+          (click)="cancelVerification()">
+          Cancelar
+        </button> -->
+        
+        <button 
+          type="button" 
+          class="btn-modal btn-modal--primary"
+          (click)="verifyAndLogin(codeInput)"
+          [disabled]="loading()">
+          {{ loading() ? 'Verificando…' : 'Verificar' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de éxito -->
+<div class="modal-overlay" *ngIf="showSuccessModal()">
+  <div class="modal modal--success">
+    <div class="modal-body">
+      <div class="success-icon">✓</div>
+      <h2 class="modal-title">¡Inicio de Sesión Exitoso!</h2>
+      <p class="modal-description">
+        Serás redirigido a tu panel
+      </p>
+      <div class="modal-actions">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de error -->
+<div class="modal-overlay" *ngIf="showErrorModal()">
+  <div class="modal modal--error">
+    <div class="modal-header">
+      <h2 class="modal-title">Error de Inicio de Sesión</h2>
+      <button class="modal-close" (click)="closeErrorModal()">×</button>
+    </div>
+    
+    <div class="modal-body">
+      <div class="error-icon">!</div>
+      <p class="modal-description">
+        {{ errorMessage() }}
+      </p>
+      <div class="modal-actions">
+        <button class="btn-modal btn-modal--error" (click)="closeErrorModal()">
+          Entendido
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de error para código de verificación - NUEVO -->
+<div class="modal-overlay" *ngIf="showCodeErrorModal()">
+  <div class="modal modal--error">
+    <div class="modal-header">
+      <h2 class="modal-title">Código Incorrecto</h2>
+      <button class="modal-close" (click)="closeCodeErrorModal()">×</button>
+    </div>
+    
+    <div class="modal-body">
+      <div class="error-icon">!</div>
+      <p class="modal-description">
+        {{ codeErrorMessage() }}
+      </p>
+      <div class="modal-actions">
+        <button class="btn-modal btn-modal--error" (click)="closeCodeErrorModal()">
+          Entendido
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 1: Solicitar Correo para Recuperación -->
+<div class="modal-overlay" *ngIf="showRecoverEmailModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Recuperar Contraseña</h2>
+      <button class="modal-close" (click)="cancelarRecuperacion()">×</button>
+    </div>
+    
+    <div class="modal-body">
+      <p class="modal-description">Ingresa tu correo electrónico para recibir un código de recuperación.</p>
+      <div class="field">
+        <input type="email" placeholder="tucorreo@ejemplo.com" class="verification-input" style="letter-spacing: normal; width: 100%; text-align: left;" #recoverEmailInput />
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-modal btn-modal--primary" (click)="solicitarRecuperacion(recoverEmailInput)" [disabled]="loading()">
+          {{ loading() ? 'Enviando…' : 'Enviar Código' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 2: Verificar Código de Recuperación -->
+<div class="modal-overlay" *ngIf="showRecoverCodeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Verificar Código</h2>
+      <button class="modal-close" (click)="cancelarRecuperacion()">×</button>
+    </div>
+    
+    <div class="modal-body">
+      <p class="modal-description">Se ha enviado un código a {{ recoverEmail }}. Ingrésalo a continuación.</p>
+      <div class="field">
+        <input type="text" placeholder="- - - - - -" maxlength="6" class="verification-input" #recoverCodeInput />
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-modal btn-modal--primary" (click)="verificarCodigoRecuperacion(recoverCodeInput)" [disabled]="loading()">
+          {{ loading() ? 'Verificando…' : 'Verificar' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 3: Restablecer Contraseña -->
+<div class="modal-overlay" *ngIf="showRecoverPasswordModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Nueva Contraseña</h2>
+      <button class="modal-close" (click)="cancelarRecuperacion()">×</button>
+    </div>
+    
+    <div class="modal-body">
+      <p class="modal-description">Ingresa tu nueva contraseña. Debe ser segura y tener al menos 12 caracteres.</p>
+      <form [formGroup]="recoverForm" (ngSubmit)="restablecerContrasena()">
+        <div class="field">
+          <input type="password" formControlName="nueva_contrasena" placeholder="Nueva contraseña" class="verification-input" style="letter-spacing: normal; width: 100%; text-align: left; margin-bottom: 1rem;" />
+          <small *ngIf="rf.nueva_contrasena.touched && rf.nueva_contrasena.invalid" style="color: red;">Mínimo 12 caracteres requeridos</small>
+        </div>
+        <div class="field">
+          <input type="password" formControlName="confirmar_contrasena" placeholder="Confirmar contraseña" class="verification-input" style="letter-spacing: normal; width: 100%; text-align: left; margin-bottom: 1rem;" />
+        </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn-modal btn-modal--primary" [disabled]="loading() || recoverForm.invalid">
+            {{ loading() ? 'Guardando…' : 'Cambiar Contraseña' }}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 4: Prompt Solicitar Desbloqueo -->
+<div class="modal-overlay" *ngIf="showUnlockPromptModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Cuenta Bloqueada</h2>
+      <button class="modal-close" (click)="cancelarDesbloqueo()">×</button>
+    </div>
+    
+    <div class="modal-body">
+      <div class="error-icon" style="color: #f44336; font-size: 3rem; text-align: center; margin-bottom: 1rem;">!</div>
+      <p class="modal-description">Tu cuenta ha sido bloqueada por múltiples intentos fallidos. Puedes solicitar un código de desbloqueo a tu correo registrado.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn-modal btn-modal--primary" (click)="solicitarDesbloqueo()" [disabled]="loading()">
+          {{ loading() ? 'Enviando…' : 'Solicitar Desbloqueo' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal 5: Verificar Código de Desbloqueo -->
+<div class="modal-overlay" *ngIf="showUnlockCodeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 class="modal-title">Desbloquear Cuenta</h2>
+      <button class="modal-close" (click)="cancelarDesbloqueo()">×</button>
+    </div>
+    
+    <div class="modal-body">
+      <p class="modal-description">Se ha enviado un código de desbloqueo a tu correo. Ingrésalo a continuación para reactivar tu cuenta.</p>
+      <div class="field">
+        <input type="text" placeholder="- - - - - -" maxlength="6" class="verification-input" #unlockCodeInput />
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-modal btn-modal--primary" (click)="confirmarDesbloqueo(unlockCodeInput)" [disabled]="loading()">
+          {{ loading() ? 'Verificando…' : 'Desbloquear Cuenta' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

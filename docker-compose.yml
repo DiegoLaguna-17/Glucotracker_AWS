@@ -1,0 +1,46 @@
+
+
+services:
+
+  # =========================
+  # FRONTEND (Angular + Nginx)
+  # =========================
+  frontend:
+    build:
+      context: ./Frontend-Glucotracker-Seguridad-main
+      dockerfile: Dockerfile
+    container_name: angular_frontend
+    ports:
+      - "80:80"
+    restart: always
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+
+  # =========================
+  # BACKEND (Node.js API)
+  # =========================
+  backend:
+    build:
+      context: ./Backend-Glucotracker-seguridad-main
+      dockerfile: Dockerfile
+    container_name: node_backend
+    ports:
+      - "3000:3000"
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      
+    networks:
+      - app-network
+
+
+# =========================
+# NETWORK INTERNA
+# =========================
+networks:
+  app-network:
+    driver: bridge

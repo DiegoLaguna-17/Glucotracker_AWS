@@ -1,0 +1,32 @@
+# =========================
+# STAGE 1: BUILD ANGULAR
+# =========================
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+ENV NODE_OPTIONS=--max_old_space_size=4096
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+# 👇 IMPORTANTE: sin configuration aquí
+RUN npm run build
+
+
+# =========================
+# STAGE 2: NGINX
+# =========================
+FROM nginx:1.25-alpine
+
+RUN rm -rf /usr/share/nginx/html/*
+
+COPY --from=build /app/dist/frontend/browser /usr/share/nginx/html
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

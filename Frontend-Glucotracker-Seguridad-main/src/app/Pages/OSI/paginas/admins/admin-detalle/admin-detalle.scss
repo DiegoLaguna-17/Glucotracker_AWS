@@ -1,0 +1,346 @@
+h1,
+h2,
+span {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.perfil {
+  background: #eefafa;
+  min-height: 100dvh;
+  box-sizing: border-box;
+}
+
+.nombre {
+  margin: 0 0 12px 0;
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: #172b3a;
+}
+
+.grid {
+  font-family: Arial, Helvetica, sans-serif;
+
+  display: grid;
+  gap: 14px;
+  /* 3 filas principales:
+     1) datos
+     2) matrícula
+     3) fila mixta (depto + carnet) y la de admitido por abarca ancho completo */
+  grid-template-columns: 1fr;
+}
+
+/* Cards base */
+.card {
+  background: #fff;
+  border: 3px solid #2d7fb0;
+  border-radius: 12px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+
+  h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 800;
+    color: #1b2f40;
+  }
+}
+
+.page {
+  padding: 24px;
+  padding-left: 50px;
+  box-sizing: border-box;
+  min-height: 100dvh;
+  background: #eefafa;
+  animation: fadeIn 0.8s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+
+/* Datos personales */
+.datos .cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+
+  ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+  }
+}
+
+/* Matrícula y Carnet: imagen responsiva centrada */
+.img-wrap {
+  width: 100%;
+  background: #f9fcff;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  padding: 10px;
+}
+
+.img-wrap img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 6px;
+}
+
+/* Departamento / Admitido por */
+.center-big {
+  display: grid;
+  place-items: center;
+  min-height: 110px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #1a2a3a;
+  text-align: center;
+}
+
+/* Layout responsivo: en >= 900px
+   - Fila 1: datos (2 columnas)
+   - Fila 2: matrícula (entera)
+   - Fila 3: depto (1) + carnet (1)
+   - Fila 4: admitido (entera)
+*/
+@media (min-width: 900px) {
+  .grid {
+    grid-template-columns: repeat(2, 1fr);
+    grid-auto-rows: auto;
+  }
+
+  .datos {
+    grid-column: 1 / -1;
+    /* ocupar todo el ancho */
+  }
+
+  .matricula {
+    grid-column: 1 / -1;
+    /* ocupar todo el ancho */
+  }
+
+  .depto {
+    grid-column: 1 / 2;
+  }
+
+  .carnet {
+    grid-column: 2 / 3;
+  }
+
+  .admitido {
+    grid-column: 1 / -1;
+    /* ocupar todo el ancho */
+  }
+}
+
+/* Pequeños retoques tipográficos */
+b {
+  color: #0a80fb;
+}
+
+/* ... (tu código anterior) ... */
+
+/* ====== ACCIONES (Botones) ====== */
+.actions-container {
+  margin-top: 2rem;
+  display: flex;
+  justify-content: flex-end;
+  /* Alinea el botón a la derecha */
+}
+
+.btn {
+  padding: 12px 24px;
+  background-color: #5ab0c9;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: bold;
+  transition: all 0.3s ease;
+  font-family: Arial, Helvetica, sans-serif;
+
+  &:hover {
+    background-color: #3a90b5;
+    transform: scale(1.02);
+  }
+}
+
+.btn-danger {
+  background-color: #ff6b6b;
+  color: white;
+
+  &:hover {
+    background-color: #ff4c4c;
+    box-shadow: 0 4px 10px rgba(255, 107, 107, 0.3);
+  }
+}
+
+
+/* ... (tus estilos anteriores) ... */
+
+.btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: bold;
+  transition: all 0.3s ease;
+  color: white;
+
+  &:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+}
+
+/* Rojo para suspender cuenta activa */
+.btn-danger {
+  background-color: #ff6b6b;
+
+  &:hover:not(:disabled) {
+    background-color: #ff4c4c;
+    transform: scale(1.02);
+  }
+}
+
+/* Verde para activar cuenta suspendida */
+.btn-success {
+  background-color: #28a745;
+
+  &:hover:not(:disabled) {
+    background-color: #218838;
+    transform: scale(1.02);
+  }
+}
+
+.actions-container {
+  margin-top: 2rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ==========================================================================
+   MODALES DE ALERTA (Éxito y Error)
+   ========================================================================== */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  animation: fadeIn 0.25s ease;
+}
+
+.modal-alerta-bg {
+  z-index: 200; 
+}
+
+.modal-alerta {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 2.5rem 2rem;
+  width: 360px;
+  max-width: 90%;
+  z-index: 201;
+  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.2);
+  text-align: center;
+  animation: bounceIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  font-family: Arial, Helvetica, sans-serif;
+
+  .close-alerta {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    background: none;
+    border: none;
+    font-size: 1.2rem;
+    color: #999;
+    cursor: pointer;
+    transition: color 0.2s;
+    &:hover { color: #333; }
+  }
+
+  .alerta-icon-wrapper {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 1.5rem;
+    
+    &.success-bg {
+      background-color: #d1fae5; 
+      color: #059669; 
+    }
+
+    &.error-bg {
+      background-color: #fee2e2; 
+      color: #dc2626; 
+    }
+  }
+
+  .alerta-title {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0 0 0.8rem 0;
+    color: #1f2937;
+  }
+
+  .alerta-message {
+    font-size: 1rem;
+    line-height: 1.5;
+    color: #4b5563;
+    margin: 0;
+  }
+
+  .btn-entendido {
+    margin-top: 1.8rem;
+    width: 100%;
+    background: #f3f4f6;
+    border: 1px solid #d1d5db;
+    color: #374151;
+    font-weight: 600;
+    padding: 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+      background: #e5e7eb;
+    }
+  }
+}
+
+.modal-alerta--success {
+  border-top: 6px solid #059669;
+}
+.modal-alerta--error {
+  border-top: 6px solid #dc2626;
+}
+
+@keyframes bounceIn {
+  0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+  50% { transform: translate(-50%, -50%) scale(1.05); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
