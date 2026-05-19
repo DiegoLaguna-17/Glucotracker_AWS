@@ -1,19 +1,18 @@
 // controllers/authController.js
-const supabase = require('../../database');
+const pool = require('../../database');
 const { verifyPassword, generateToken } = require('../utils/auth');
 
 const loginPrueba = async (req, res) => {
     try {
         const { correo, contrasena } = req.body;
 
-        const { data: usuarioData, error: usuarioError } = await supabase
-            .from("usuario")
-            .select("id_usuario, correo, contrasena, rol")
-            .eq("correo", correo)
-            .eq("estado", true)
-            .single();
+        const { rows: userRows } = await pool.query(
+            `SELECT id_usuario, correo, contrasena, rol FROM usuario WHERE correo = $1 AND estado = true LIMIT 1`,
+            [correo]
+        );
+        const usuarioData = userRows[0];
 
-        if (usuarioError || !usuarioData) {
+        if (!usuarioData) {
             console.log({
                 fecha: new Date().toISOString(),
                 endpoint: '/api/login',
@@ -31,15 +30,15 @@ const loginPrueba = async (req, res) => {
         // 2. Verificar la contraseña usando Bcrypt
         const isValid = await verifyPassword(contrasena, usuario.contrasena);
         
-        const { data: adminData } = await supabase
-            .from("administrador")
-            .select("id_admin, cargo")
-            .eq("id_usuario", usuario.id_usuario)
-            .maybeSingle();
+        const { rows: adminRows } = await pool.query(
+            `SELECT id_admin, cargo FROM administrador WHERE id_usuario = $1 LIMIT 1`,
+            [usuario.id_usuario]
+        );
+        const adminData = adminRows[0] || null;
         usuario.id_admin=adminData?.id_admin||null;
         // 3. Generar el JWT
         const token = generateToken(usuario);
-        cargo_admin=adminData.cargo;
+        let cargo_admin=adminData?.cargo||null;
         // Establecer cookie httpOnly con el token
         res.cookie('token', token, {
             httpOnly: true,   // No accesible desde JavaScript (protege contra XSS)

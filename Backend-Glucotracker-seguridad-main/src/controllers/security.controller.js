@@ -1,4 +1,4 @@
-const supabase = require('../../database');
+const pool = require('../../database');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { sendEmail } = require('../email/sendEmail');
@@ -10,13 +10,13 @@ const { esContrasenaRobusta } = require('../utils/security');
 const solicitarRecuperacion = async (req, res) => {
     const { correo } = req.body;
     try {
-        const { data: usuario, error } = await supabase
-            .from("usuario")
-            .select("id_usuario, correo")
-            .eq("correo", correo)
-            .single();
+        const { rows: uRows } = await pool.query(
+            `SELECT id_usuario, correo FROM usuario WHERE correo = $1 LIMIT 1`,
+            [correo]
+        );
+        const usuario = uRows[0];
 
-        if (error || !usuario) {
+        if (!usuario) {
             // Retornamos 200 aunque no exista para no revelar cuentas, o 404. Usaré 404 por simplicidad en este backend.
             return res.status(404).json({ error: 'Usuario no encontrado' });
         }
@@ -93,19 +93,19 @@ const cambiarContrasena = async (req, res) => {
             return res.status(400).json({ error: validacion.mensaje });
         }
 
-        const { data: usuario, error: userError } = await supabase
-            .from("usuario")
-            .select("id_usuario, contrasena")
-            .eq("correo", correo)
-            .single();
+        const { rows: uRows } = await pool.query(
+            `SELECT id_usuario, contrasena FROM usuario WHERE correo = $1 LIMIT 1`,
+            [correo]
+        );
+        const usuario = uRows[0];
 
-        if (userError || !usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
+        if (!usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
 
         // Verificar historial de contraseñas
-        const { data: historial } = await supabase
-            .from('historial_contrasena')
-            .select('contrasena_hash')
-            .eq('usuario_id_usuario', usuario.id_usuario);
+        const { rows: historial } = await pool.query(
+            `SELECT contrasena_hash FROM historial_contrasena WHERE usuario_id_usuario = $1`,
+            [usuario.id_usuario]
+        );
 
         let hashUsado = false;
         if (historial && historial.length > 0) {
@@ -131,18 +131,16 @@ const cambiarContrasena = async (req, res) => {
         const hashedPassword = await bcrypt.hash(nueva_contrasena, 10);
 
         // Guardar en historial
-        await supabase.from('historial_contrasena').insert({
-            usuario_id_usuario: usuario.id_usuario,
-            contrasena_hash: hashedPassword
-        });
+        await pool.query(
+            `INSERT INTO historial_contrasena (usuario_id_usuario, contrasena_hash) VALUES ($1, $2)`,
+            [usuario.id_usuario, hashedPassword]
+        );
 
         // Actualizar usuario
-        await supabase.from('usuario').update({
-            contrasena: hashedPassword,
-            fecha_cambio_contrasena: new Date().toISOString(),
-            intentos_fallidos: 0,
-            bloqueado_hasta: null
-        }).eq('id_usuario', usuario.id_usuario);
+        await pool.query(
+            `UPDATE usuario SET contrasena = $1, fecha_cambio_contrasena = $2, intentos_fallidos = 0, bloqueado_hasta = null WHERE id_usuario = $3`,
+            [hashedPassword, new Date().toISOString(), usuario.id_usuario]
+        );
 
         res.status(200).json({ message: 'Contraseña cambiada exitosamente.' });
 
@@ -156,13 +154,13 @@ const cambiarContrasena = async (req, res) => {
 const solicitarDesbloqueo = async (req, res) => {
     const { correo } = req.body;
     try {
-        const { data: usuario, error } = await supabase
-            .from("usuario")
-            .select("id_usuario, correo, intentos_fallidos")
-            .eq("correo", correo)
-            .single();
+        const { rows: uRows } = await pool.query(
+            `SELECT id_usuario, correo, intentos_fallidos FROM usuario WHERE correo = $1 LIMIT 1`,
+            [correo]
+        );
+        const usuario = uRows[0];
 
-        if (error || !usuario) {
+        if (!usuario) {
             return res.status(404).json({ error: 'Usuario no encontrado' });
         }
 
@@ -196,15 +194,16 @@ const confirmarDesbloqueo = async (req, res) => {
             return res.status(400).json({ error: 'Código de desbloqueo inválido o expirado.' });
         }
 
-        const { data: usuario } = await supabase.from("usuario").select("id_usuario").eq("correo", correo).single();
+        const { rows: uRows } = await pool.query(`SELECT id_usuario FROM usuario WHERE correo = $1 LIMIT 1`, [correo]);
+        const usuario = uRows[0];
         if(!usuario) return res.status(404).json({error: 'Usuario no encontrado'});
 
         deleteOTP(`desbloqueo_${correo}`);
 
-        await supabase.from('usuario').update({
-            intentos_fallidos: 0,
-            estado: true
-        }).eq('id_usuario', usuario.id_usuario);
+        await pool.query(
+            `UPDATE usuario SET intentos_fallidos = 0, estado = true WHERE id_usuario = $1`,
+            [usuario.id_usuario]
+        );
 
         res.status(200).json({ message: 'Cuenta desbloqueada exitosamente.' });
     } catch (err) {

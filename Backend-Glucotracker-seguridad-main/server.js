@@ -1,6 +1,5 @@
 
 const express = require('express');
-const supabase = require('./database');
 const bcrypt = require('bcrypt');
 require('dotenv').config();
 const cors = require('cors');
@@ -24,75 +23,9 @@ app.use(cors({
 
 
 
-// // Endpoint POST para login
-// app.post('/api/login', async (req, res) => {
-//     const { correo, contrasena } = req.body;
 
-//     const { data: usuarioData, error: usuarioError } = await supabase
-//         .from("usuario")
-//         .select("id_usuario, correo, contrasena, rol")
-//         .eq("correo", correo)
-//         .eq("estado", true);
-
-//     if (usuarioError) throw usuarioError;
-
-//     // VALIDACIÓN CORRECTA
-//     if (!usuarioData || usuarioData.length === 0) {
-//         return res.status(401).json({ error: `No se encontró ningún usuario con correo: ${correo}` });
-//     }
-
-//     const usuario = usuarioData[0];
-
-//     const id_usuario = usuario.id_usuario;
-//     const rol = usuario.rol;
-//     let id_rol = 0;
-
-//     if (rol === "administrador") {
-//         const { data: adminData, error: adminError } = await supabase
-//             .from("administrador")
-//             .select("id_admin")
-//             .eq("id_usuario", id_usuario)
-//             .single();
-
-//         if (adminError) throw adminError;
-//         id_rol = adminData.id_admin;
-
-//     } else if (rol === "medico") {
-//         const { data: medicoData, error: medicoError } = await supabase
-//             .from("medico")
-//             .select("id_medico")
-//             .eq("id_usuario", id_usuario)
-//             .single();
-
-//         if (medicoError) throw medicoError;
-//         id_rol = medicoData.id_medico;
-
-//     } else {
-//         const { data: pacienteData, error: pacienteError } = await supabase
-//             .from("paciente")
-//             .select("id_paciente")
-//             .eq("id_usuario", id_usuario)
-//             .single();
-
-//         if (pacienteError) throw pacienteError;
-//         id_rol = pacienteData.id_paciente;
-//     }
-
-//     const isMatch = await bcrypt.compare(String(contrasena), usuario.contrasena);
-
-//     if (!isMatch) {
-//         return res.status(401).json({ error: 'Contraseña incorrecta' });
-//     }
-
-//     res.status(200).json({
-//         message: "Credenciales correctas, login exitoso",
-//         id_usuario: id_usuario,
-//         id_rol: id_rol,
-//         rol: rol
-//     });
-// });
 const auditoriaEndpoint = require('./src/middlewares/auditoria.login');
-
+const pool =require("./database")
 const cookieParser = require('cookie-parser');
 app.use(cookieParser());
 const response = (res, status, code, message, data = null) => {
@@ -110,31 +43,28 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
   const { correo, contrasena } = req.body;
   const MENSAJE_ERROR_AUTH = 'Correo o contraseña incorrectos';
 
-  // 1️⃣ Validación preventiva: Evita caídas si envían body vacío (Rama HEAD)
+  // 1️⃣ Validación preventiva
   if (!correo || !contrasena) {
     return response(res, 'error', 400, 'El correo y la contraseña son obligatorios');
   }
 
   try {
-    // 2️⃣ Buscar usuario incluyendo TODOS los campos necesarios de ambas ramas
-    const { data: usuarioData, error: usuarioError } = await supabase
-      .from("usuario")
-      .select("id_usuario, correo, contrasena, rol, estado, intentos_fallidos, bloqueado_hasta, fecha_cambio_contrasena")
-      .eq("correo", correo)
-      .single();
+    // 2️⃣ Buscar usuario usando SQL parametrizado ($1)
+    const userQuery = `
+      SELECT id_usuario, correo, contrasena, rol, estado, intentos_fallidos, bloqueado_hasta, fecha_cambio_contrasena 
+      FROM usuario 
+      WHERE correo = $1
+    `;
+    const { rows: userRows } = await pool.query(userQuery, [correo]);
+    const usuario = userRows[0];
 
-    // Si Supabase no encuentra el correo, devuelve PGRST116
-    if ((usuarioError && usuarioError.code === 'PGRST116') || !usuarioData) {
+    // Si no se encuentra el usuario
+    if (!usuario) {
       console.log(`[LOGIN FALLIDO] Correo inexistente: ${correo}`);
       return response(res, 'error', 401, MENSAJE_ERROR_AUTH);
     }
 
-    // Cualquier otro error de base de datos
-    if (usuarioError) throw usuarioError;
-
-    const usuario = usuarioData;
-
-    // 3️⃣ Verificar si la cuenta está inactiva o bloqueada (Rama HEAD + Seguridad)
+    // 3️⃣ Verificar si la cuenta está inactiva o bloqueada
     if (usuario.estado === false) {
       if (usuario.intentos_fallidos >= 3) {
         console.log(`[LOGIN RECHAZADO] Cuenta bloqueada por intentos: ${correo}`);
@@ -150,18 +80,23 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
     if (!isMatch) {
       // 🔸 Lógica de seguridad: Incrementar intentos fallidos
       const nuevosIntentos = (usuario.intentos_fallidos || 0) + 1;
-      let updateData = { intentos_fallidos: nuevosIntentos };
+      let nuevoEstado = usuario.estado;
+      let nuevaFechaDesbloqueo = usuario.bloqueado_hasta;
 
       if (nuevosIntentos >= 3) {
-        // Bloquear cuenta (suspender usuario)
-        updateData.estado = false;
-        // Opcional: mantener bloqueado_hasta si se quiere, pero estado: false ya bloquea
+        nuevoEstado = false;
         const fechaDesbloqueo = new Date();
         fechaDesbloqueo.setFullYear(fechaDesbloqueo.getFullYear() + 100);
-        updateData.bloqueado_hasta = fechaDesbloqueo.toISOString();
+        nuevaFechaDesbloqueo = fechaDesbloqueo.toISOString();
       }
 
-      await supabase.from("usuario").update(updateData).eq("id_usuario", usuario.id_usuario);
+      // Actualizar intentos en la base de datos
+      const updateIntentosQuery = `
+        UPDATE usuario 
+        SET intentos_fallidos = $1, estado = $2, bloqueado_hasta = $3 
+        WHERE id_usuario = $4
+      `;
+      await pool.query(updateIntentosQuery, [nuevosIntentos, nuevoEstado, nuevaFechaDesbloqueo, usuario.id_usuario]);
 
       const mensaje = nuevosIntentos >= 3
         ? 'Cuenta bloqueada por múltiples intentos fallidos.'
@@ -177,19 +112,22 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
 
     // --- HASTA AQUÍ LAS CREDENCIALES SON 100% CORRECTAS ---
 
-    // 6️⃣ Reiniciar intentos fallidos tras éxito (Rama Seguridad)
+    // 6️⃣ Reiniciar intentos fallidos tras éxito
     if (usuario.intentos_fallidos > 0) {
-      await supabase.from("usuario").update({ intentos_fallidos: 0, bloqueado_hasta: null }).eq("id_usuario", usuario.id_usuario);
+      const resetIntentosQuery = `UPDATE usuario SET intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id_usuario = $1`;
+      await pool.query(resetIntentosQuery, [usuario.id_usuario]);
     }
 
     // Verificar vigencia (3 meses) usando historial_contrasena
-    const { data: historialData } = await supabase
-      .from('historial_contrasena')
-      .select('created_at')
-      .eq('usuario_id_usuario', usuario.id_usuario)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
+    const historialQuery = `
+      SELECT created_at 
+      FROM historial_contrasena 
+      WHERE usuario_id_usuario = $1 
+      ORDER BY created_at DESC 
+      LIMIT 1
+    `;
+    const { rows: historialRows } = await pool.query(historialQuery, [usuario.id_usuario]);
+    const historialData = historialRows[0];
 
     let fechaCambio = usuario.fecha_cambio_contrasena;
     if (historialData && historialData.created_at) {
@@ -208,7 +146,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
       }
     }
 
-    // 8️⃣ Buscar Rol del Usuario (Soporta rol 'soporte' de la Rama HEAD)
+    // 8️⃣ Buscar Rol del Usuario
     const rolMap = {
       administrador: 'id_admin',
       soporte: 'id_admin',
@@ -218,18 +156,18 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
 
     let tablaRol = usuario.rol;
     if (tablaRol === "soporte") {
-      tablaRol = "administrador"; // Los soportes se guardan en la tabla administrador
+      tablaRol = "administrador";
     }
 
     const columnaIdRol = rolMap[usuario.rol];
 
-    const { data: rolData, error: rolError } = await supabase
-      .from(tablaRol)
-      .select(columnaIdRol)
-      .eq("id_usuario", usuario.id_usuario)
-      .single();
+    // Para nombres de tablas y columnas no se pueden usar parámetros $1, 
+    // pero como vienen de un mapa estricto (rolMap), es seguro inyectarlos así:
+    const rolQuery = `SELECT ${columnaIdRol} FROM ${tablaRol} WHERE id_usuario = $1`;
+    const { rows: rolRows } = await pool.query(rolQuery, [usuario.id_usuario]);
+    const rolData = rolRows[0];
 
-    if (rolError || !rolData) {
+    if (!rolData) {
       throw new Error(`Inconsistencia en BD: No se encontró registro en ${tablaRol} para usuario ${usuario.id_usuario}`);
     }
 
@@ -257,8 +195,7 @@ app.post('/api/login', auditoriaEndpoint(), async (req, res) => {
     console.error(`[ERROR CRÍTICO LOGIN] ${correo} - IP: ${req.ip} - Motivo:`, error.message);
     return response(res, 'error', 500, 'Ocurrió un error interno del servidor al procesar tu solicitud. Intenta nuevamente.');
   }
-});
-// Importación de la rama de seguridad (asegúrate de que la ruta sea correcta)
+});// Importación de la rama de seguridad (asegúrate de que la ruta sea correcta)
 const { esContrasenaRobusta } = require('./src/utils/security');
 
 app.put('/api/usuario/:id_usuario/password', async (req, res) => {
@@ -273,21 +210,15 @@ app.put('/api/usuario/:id_usuario/password', async (req, res) => {
 
   try {
     // 2️⃣ Obtener datos del usuario actual
-    const { data: usuario, error: userError } = await supabase
-      .from('usuario')
-      .select('contrasena')
-      .eq('id_usuario', id_usuario)
-      .single();
+    const { rows: userRows } = await pool.query('SELECT contrasena FROM usuario WHERE id_usuario = $1', [id_usuario]);
+    const usuario = userRows[0];
 
-    if (userError || !usuario) {
+    if (!usuario) {
       return response(res, 'error', 404, 'Usuario no encontrado en el sistema.');
     }
 
     // 3️⃣ Revisar historial de contraseñas
-    const { data: historial } = await supabase
-      .from('historial_contrasena')
-      .select('contrasena_hash')
-      .eq('usuario_id_usuario', id_usuario);
+    const { rows: historial } = await pool.query('SELECT contrasena_hash FROM historial_contrasena WHERE usuario_id_usuario = $1', [id_usuario]);
 
     let hashUsado = false;
 
@@ -315,24 +246,22 @@ app.put('/api/usuario/:id_usuario/password', async (req, res) => {
     const hashedPassword = await bcrypt.hash(contrasena, saltRounds);
 
     // 5️⃣ Guardar en historial
-    await supabase.from('historial_contrasena').insert({
-      usuario_id_usuario: id_usuario,
-      contrasena_hash: hashedPassword
-    });
+    await pool.query(
+      'INSERT INTO historial_contrasena (usuario_id_usuario, contrasena_hash) VALUES ($1, $2)',
+      [id_usuario, hashedPassword]
+    );
 
     // 6️⃣ Actualizar usuario (desbloquear cuenta y reiniciar intentos)
-    const { data, error } = await supabase
-      .from('usuario')
-      .update({
-        contrasena: hashedPassword,
-        fecha_cambio_contrasena: new Date().toISOString(),
-        intentos_fallidos: 0,
-        bloqueado_hasta: null
-      })
-      .eq('id_usuario', id_usuario)
-      .select('id_usuario, nombre_completo, correo');
-
-    if (error) throw error;
+    const { rows: data } = await pool.query(
+      `UPDATE usuario 
+       SET contrasena = $1, 
+           fecha_cambio_contrasena = NOW(), 
+           intentos_fallidos = 0, 
+           bloqueado_hasta = NULL 
+       WHERE id_usuario = $2 
+       RETURNING id_usuario, nombre_completo, correo`,
+      [hashedPassword, id_usuario]
+    );
 
     return response(res, 'success', 200, 'Contraseña actualizada correctamente.', data[0]);
 
@@ -357,13 +286,10 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
     deleteOTP(id_usuario);
 
     // 2️⃣ Obtener usuario
-    const { data: usuario, error: usuarioError } = await supabase
-      .from("usuario")
-      .select("id_usuario, correo, rol")
-      .eq("id_usuario", id_usuario)
-      .single();
+    const { rows: userRows } = await pool.query('SELECT id_usuario, correo, rol FROM usuario WHERE id_usuario = $1', [id_usuario]);
+    const usuario = userRows[0];
 
-    if (usuarioError || !usuario) {
+    if (!usuario) {
       return response(res, 'error', 404, 'Usuario no encontrado en el sistema');
     }
 
@@ -385,13 +311,13 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
     }
 
     // 4️⃣ Obtener datos específicos del rol
-    const { data: rolData, error: rolError } = await supabase
-      .from(config.tabla)
-      .select(config.campos.join(", "))
-      .eq("id_usuario", id_usuario)
-      .single();
+    const { rows: rolRows } = await pool.query(
+      `SELECT ${config.campos.join(", ")} FROM ${config.tabla} WHERE id_usuario = $1`, 
+      [id_usuario]
+    );
+    const rolData = rolRows[0];
 
-    if (rolError || !rolData) {
+    if (!rolData) {
       return response(res, 'error', 404, 'Información del perfil no encontrada');
     }
 
@@ -412,12 +338,15 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
     let permisos = [];
 
     if (usuario.rol === "administrador") {
-      const { data: permisosData } = await supabase
-        .from("admin_permiso")
-        .select("permiso(nombre)")
-        .eq("id_admin", id_rol);
+      const { rows: permisosData } = await pool.query(
+        `SELECT p.nombre 
+         FROM admin_permiso ap 
+         JOIN permiso p ON ap.id_permiso = p.id_permiso 
+         WHERE ap.id_admin = $1`,
+        [id_rol]
+      );
 
-      permisos = permisosData?.map(p => p.permiso.nombre) || [];
+      permisos = permisosData?.map(p => p.nombre) || [];
     }
 
     // 7️⃣ Generar JWT Token
@@ -432,8 +361,8 @@ app.post('/api/verify-otp', auditoriaEndpoint(), async (req, res) => {
     // 8️⃣ Establecer Cookie de seguridad
     res.cookie('token', token, {
       httpOnly: true,
-      secure: true,
-      sameSite: 'none',
+      secure: false,
+      sameSite: 'lax',
       maxAge: 5 * 60 * 60 * 1000 // 5 horas
     });
 
@@ -465,20 +394,14 @@ app.put('/usuario/:id_usuario/password', async (req, res) => {
   }
 
   try {
-    const { data: usuario, error: userError } = await supabase
-      .from('usuario')
-      .select('contrasena')
-      .eq('id_usuario', id_usuario)
-      .single();
+    const { rows: userRows } = await pool.query('SELECT contrasena FROM usuario WHERE id_usuario = $1', [id_usuario]);
+    const usuario = userRows[0];
 
-    if (userError || !usuario) {
+    if (!usuario) {
       return res.status(404).json({ error: 'Usuario no encontrado.' });
     }
 
-    const { data: historial } = await supabase
-      .from('historial_contrasena')
-      .select('contrasena_hash')
-      .eq('usuario_id_usuario', id_usuario);
+    const { rows: historial } = await pool.query('SELECT contrasena_hash FROM historial_contrasena WHERE usuario_id_usuario = $1', [id_usuario]);
 
     let hashUsado = false;
     if (historial && historial.length > 0) {
@@ -500,26 +423,22 @@ app.put('/usuario/:id_usuario/password', async (req, res) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(contrasena, saltRounds);
 
-    await supabase.from('historial_contrasena').insert({
-      usuario_id_usuario: id_usuario,
-      contrasena_hash: hashedPassword
-    });
+    await pool.query(
+      'INSERT INTO historial_contrasena (usuario_id_usuario, contrasena_hash) VALUES ($1, $2)',
+      [id_usuario, hashedPassword]
+    );
 
-    // Actualizar en Supabase
-    const { data, error } = await supabase
-      .from('usuario')
-      .update({
-        contrasena: hashedPassword,
-        fecha_cambio_contrasena: new Date().toISOString(),
-        intentos_fallidos: 0,
-        bloqueado_hasta: null
-      })
-      .eq('id_usuario', id_usuario)
-      .select('id_usuario, nombre_completo, correo');
-
-    if (error) {
-      throw error;
-    }
+    // Actualizar en BD
+    const { rows: data } = await pool.query(
+      `UPDATE usuario 
+       SET contrasena = $1, 
+           fecha_cambio_contrasena = NOW(), 
+           intentos_fallidos = 0, 
+           bloqueado_hasta = NULL 
+       WHERE id_usuario = $2 
+       RETURNING id_usuario, nombre_completo, correo`,
+      [hashedPassword, id_usuario]
+    );
 
     res.json({ message: 'Contraseña actualizada correctamente.', usuario: data[0] });
   } catch (err) {

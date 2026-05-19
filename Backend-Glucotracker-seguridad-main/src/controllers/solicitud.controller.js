@@ -1,5 +1,5 @@
 const bcrypt = require('bcrypt');
-const supabase = require('../../database'); // Ajusta la ruta a tu conexión
+const pool = require('../../database');
 
 
 const response = (res, status, code, message, data = null) => {
@@ -19,35 +19,24 @@ const solicitarRegistro = async (req, res) => {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(contrasena, saltRounds);
 
-    // 3. Insertamos el "cascarón" en la tabla usuario
-    // Nota: Mapeamos 'telefono' (body) a 'teléfono' (columna exacta de tu BD)
-    const { data, error } = await supabase
-      .from('usuario')
-      .insert([
-        {
-          nombre_completo: nombre,
-          correo: correo,
-          contrasena: hashedPassword,
-          fecha_nac: fechaNac,
-          teléfono: telefono,
-          estado: false,       // 🔴 IMPORTANTE: Cuenta inactiva por defecto
-          rol: 'pendiente'     // Etiqueta informativa para saber que aún no es paciente ni médico
-        }
-      ])
-      .select();
+    try {
+      const { rows: data } = await pool.query(
+        `INSERT INTO usuario (nombre_completo, correo, contrasena, fecha_nac, "teléfono", estado, rol)
+         VALUES ($1, $2, $3, $4, $5, false, 'pendiente') RETURNING id_usuario`,
+        [nombre, correo, hashedPassword, fechaNac, telefono]
+      );
 
-    if (error) {
+      // 5. Respuesta exitosa (201 Created)
+      return response(res, 'success', 201, 'Solicitud registrada correctamente. Pendiente de validación por Soporte.', { 
+        usuario_id: data[0].id_usuario 
+      });
+    } catch (error) {
       // 4. Manejo de error si el correo ya está registrado (Violación de restricción UNIQUE)
       if (error.code === '23505') {
         return response(res, 'error', 409, 'El correo electrónico ingresado ya se encuentra registrado en el sistema');
       }
       throw error;
     }
-
-    // 5. Respuesta exitosa (201 Created)
-    return response(res, 'success', 201, 'Solicitud registrada correctamente. Pendiente de validación por Soporte.', { 
-      usuario_id: data[0].id_usuario 
-    });
 
   } catch (error) {
     console.error('Error en solicitarRegistro:', error.message);

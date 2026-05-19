@@ -1,5 +1,4 @@
 
-
 services:
 
   # =========================
@@ -18,7 +17,6 @@ services:
     networks:
       - app-network
 
-
   # =========================
   # BACKEND (Node.js API)
   # =========================
@@ -27,13 +25,7 @@ services:
       context: ./Backend-Glucotracker-seguridad-main
       dockerfile: Dockerfile
     container_name: node_backend
-    ports:
-      - "3000:3000"
-    restart: always
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      
+    restart: always      
     networks:
       - app-network
 

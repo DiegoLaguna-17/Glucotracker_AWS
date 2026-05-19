@@ -1,4 +1,4 @@
-const supabase = require('../../database');
+const pool = require('../../database');
 
 const auditoriaEndpoint = (rolDefecto = null) => {
   return async (req, res, next) => {
@@ -29,25 +29,20 @@ const auditoriaEndpoint = (rolDefecto = null) => {
 
           // Resolver id_rol si no se pasó
           if (!id_rol && id_usuario && rolDefecto) {
-            const { data } = await supabase
-              .from(rolDefecto)
-              .select(`id_${rolDefecto}`)
-              .eq('id_usuario', id_usuario)
-              .maybeSingle();
+            const { rows: dataRows } = await pool.query(
+              `SELECT id_${rolDefecto} FROM ${rolDefecto} WHERE id_usuario = $1 LIMIT 1`,
+              [id_usuario]
+            );
+            const data = dataRows[0];
             if (data) id_rol = data[`id_${rolDefecto}`];
           }
 
           // Insertar auditoría
-          await supabase.from('auditoria_endpoints').insert([{
-            id_usuario,
-            rol:"login",
-            id_rol,
-            endpoint: req.originalUrl,
-            operacion: req.method,
-            exito: res.statusCode < 400,
-            codigo_http: res.statusCode,
-            ip_origen: req.ip
-          }]);
+          await pool.query(
+            `INSERT INTO auditoria_endpoints (id_usuario, rol, id_rol, endpoint, operacion, exito, codigo_http, ip_origen)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [id_usuario, "login", id_rol, req.originalUrl, req.method, res.statusCode < 400, res.statusCode, req.ip]
+          );
         } catch (err) {
           console.error('Error auditoría endpoint:', err?.message || err);
         }

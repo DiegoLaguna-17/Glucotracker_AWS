@@ -1,4 +1,4 @@
-const supabase = require('../../database'); // tu cliente Supabase
+const pool = require('../../database');
 const bcrypt=require('bcrypt')
 const response = (res, status, code, message, data = null) => {
   return res.status(code).json({
@@ -39,22 +39,23 @@ const registrarPaciente = async (req, res) => {
     const imgFiles = req.files?.foto_perfil;
 
     if (!imgFiles || imgFiles.length === 0) {
-      return response(res)res.status(400).json({ error: "Archivo de perfil faltante" });
+      return res.status(400).json({ error: "Archivo de perfil faltante" });
     }
 
-    const img = imgFiles[0];
-    const imgUpload = await supabase.storage
-      .from("perfiles_pacientes")
-      .upload(`imgs/${Date.now()}_${img.originalname}`, img.buffer, { contentType: img.mimetype });
-
-    if (imgUpload.error) throw imgUpload.error;
-    const imgUrl = supabase.storage.from("perfiles_pacientes").getPublicUrl(imgUpload.data.path).data.publicUrl;
+    // TODO: Configurar AWS S3 para subir la foto de perfil del paciente
+    const imgUrl = "https://placeholder.com/img";
 
     // Validación de campos obligatorios
     if (!nombre_completo || !correo || !contrasena || !rol || !fecha_nac || !teléfono || !id_medico
         || !id_actividad || !genero || !peso || !altura || !enfermedad_id || !tratamiento_id
-        || !dosis_ || !nombre_emergencia || !numero_emergencia || !imgUrl) {
+        || !dosis_ || !nombre_emergencia || !numero_emergencia) {
       return res.status(400).json({ error: 'Todos los campos obligatorios deben ser llenados' });
+    }
+
+    // Checking if user exists first to avoid unnecessary work
+    const { rows: existingUserRows } = await pool.query(`SELECT id_usuario FROM usuario WHERE correo = $1 LIMIT 1`, [correo]);
+    if (existingUserRows.length > 0) {
+      return res.status(400).json({ error: 'El correo ya está registrado' });
     }
 
     // Conversión de tipos
@@ -72,80 +73,43 @@ const registrarPaciente = async (req, res) => {
     const hashedPassword = await bcrypt.hash(contrasena, saltRounds);
 
     // Insert usuario
-    const { data: usuarioInsertadoData, error: usuarioInsertadoError } = await supabase
-      .from("usuario")
-      .insert([{
-        nombre_completo,
-        correo,
-        contrasena: hashedPassword,
-        rol,
-        fecha_nac,
-        teléfono
-      }]).select();
-
-    if (usuarioInsertadoError) throw usuarioInsertadoError;
-
-    const usuario_insertado = usuarioInsertadoData[0];
+    const { rows: userRows } = await pool.query(
+      `INSERT INTO usuario (nombre_completo, correo, contrasena, rol, fecha_nac, "teléfono")
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [nombre_completo, correo, hashedPassword, rol, fecha_nac, teléfono]
+    );
+    const usuario_insertado = userRows[0];
 
     // Insert paciente
-    const { data: pacienteData, error: pacienteError } = await supabase
-      .from("paciente")
-      .insert([{
-        id_usuario: usuario_insertado.id_usuario,
-        id_medico: id_medicoInt,
-        id_nivel_actividad: id_actividadInt,
-        genero,
-        peso: pesoNum,
-        altura: alturaNum,
-        embarazo: embarazadaBool,
-        nombre_emergencia,
-        numero_emergencia,
-        foto_perfil: imgUrl
-      }]).select();
-
-    if (pacienteError) throw pacienteError;
-
-    const paciente = pacienteData[0];
+    const { rows: pacienteRows } = await pool.query(
+      `INSERT INTO paciente (id_usuario, id_medico, id_nivel_actividad, genero, peso, altura, embarazo, nombre_emergencia, numero_emergencia, foto_perfil)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [usuario_insertado.id_usuario, id_medicoInt, id_actividadInt, genero, pesoNum, alturaNum, embarazadaBool, nombre_emergencia, numero_emergencia, imgUrl]
+    );
+    const paciente = pacienteRows[0];
 
     // Seguimiento embarazo solo si aplica
     if (embarazadaBool && semanasInt !== null) {
-      await supabase.from('seguimiento_embarazo').insert({
-        id_paciente: paciente.id_paciente,
-        fecha_registro: usuario_insertado.fecha_registro,
-        semanas_embarazo: semanasInt
-      });
+      await pool.query(
+        `INSERT INTO seguimiento_embarazo (id_paciente, fecha_registro, semanas_embarazo)
+         VALUES ($1, CURRENT_DATE, $2)`,
+        [paciente.id_paciente, semanasInt]
+      );
     }
 
     // Insert tratamiento
-    const { data: dataTratamiento, error: errorTratamiento } = await supabase
-      .from('tratamiento_enfermedad')
-      .insert({
-        id_paciente: paciente.id_paciente,
-        id_tratamiento: tratamiento_idInt,
-        dosis: dosis_
-      });
-
-    if (errorTratamiento) throw errorTratamiento;
+    await pool.query(
+      `INSERT INTO tratamiento_enfermedad (id_paciente, id_tratamiento, dosis)
+       VALUES ($1, $2, $3)`,
+      [paciente.id_paciente, tratamiento_idInt, dosis_]
+    );
 
     // Insert enfermedad
-    const { data: dataEnfermedad, error: errorEnfermedad } = await supabase
-      .from('paciente_enfermedad')
-      .insert({
-        id_paciente: paciente.id_paciente,
-        id_enfermedad: enfermedad_idInt
-      });
-    
-    const { data: existing } = await supabase
-      .from('usuario')
-      .select('id_usuario')
-      .eq('correo', correo)
-      .single();
-
-    if (existing) {
-      return res.status(400).json({ error: 'El correo ya está registrado' });
-}
-
-    if (errorEnfermedad) throw errorEnfermedad;
+    await pool.query(
+      `INSERT INTO paciente_enfermedad (id_paciente, id_enfermedad)
+       VALUES ($1, $2)`,
+      [paciente.id_paciente, enfermedad_idInt]
+    );
 
     res.status(200).json({
       message: 'Usuario y paciente registrados correctamente',
@@ -169,42 +133,52 @@ const perfilPaciente = async (req, res) => {
       return response(res, 'error', 400, 'El ID del paciente proporcionado no es válido');
     }
 
-    // 2️⃣ Consulta relacional con Supabase (Reemplazo del RPC)
-    const { data: p, error } = await supabase
-      .from('paciente')
-      .select(`
-        id_paciente,
-        genero,
-        altura,
-        peso,
-        embarazo,
-        nombre_emergencia,
-        numero_emergencia,
-        foto_perfil,
-        usuario!inner (
-          id_usuario,
-          nombre_completo,
-          fecha_nac,
-          teléfono,
-          correo,
-          fecha_registro
-        ),
-        nivel_actividad_fisica ( descripcion ),
-        administrador ( usuario ( nombre_completo ) ),
-        medico ( usuario ( nombre_completo ) ),
-        paciente_enfermedad ( enfermedades_base ( nombre_enfermedad ) ),
-        tratamiento_enfermedad ( dosis, tratamientos ( nombre_tratamiento, descripcion ) ),
-        seguimiento_embarazo ( semanas_embarazo, fecha_registro, fecha_terminacion )
-      `)
-      .eq('id_paciente', idPaciente)
-      .single(); // Esperamos un solo paciente
+    // 2️⃣ Consulta relacional con SQL
+    const { rows: dataRows } = await pool.query(`
+      SELECT 
+        p.id_paciente, p.genero, p.altura, p.peso, p.embarazo, p.nombre_emergencia, p.numero_emergencia, p.foto_perfil,
+        json_build_object(
+          'id_usuario', u.id_usuario, 
+          'nombre_completo', u.nombre_completo, 
+          'fecha_nac', u.fecha_nac, 
+          'teléfono', u.teléfono, 
+          'correo', u.correo, 
+          'fecha_registro', u.fecha_registro
+        ) as usuario,
+        json_build_object('descripcion', naf.descripcion) as nivel_actividad_fisica,
+        json_build_object('usuario', json_build_object('nombre_completo', au.nombre_completo)) as administrador,
+        json_build_object('usuario', json_build_object('nombre_completo', mu.nombre_completo)) as medico,
+        (
+          SELECT json_agg(json_build_object('enfermedades_base', json_build_object('nombre_enfermedad', eb.nombre_enfermedad)))
+          FROM paciente_enfermedad pe
+          JOIN enfermedades_base eb ON pe.id_enfermedad = eb.id_enfermedad
+          WHERE pe.id_paciente = p.id_paciente
+        ) as paciente_enfermedad,
+        (
+          SELECT json_agg(json_build_object('dosis', te.dosis, 'tratamientos', json_build_object('nombre_tratamiento', t.nombre_tratamiento, 'descripcion', t.descripcion)))
+          FROM tratamiento_enfermedad te
+          JOIN tratamientos t ON te.id_tratamiento = t.id_tratamiento
+          WHERE te.id_paciente = p.id_paciente
+        ) as tratamiento_enfermedad,
+        (
+          SELECT json_agg(json_build_object('semanas_embarazo', se.semanas_embarazo, 'fecha_registro', se.fecha_registro, 'fecha_terminacion', se.fecha_terminacion))
+          FROM seguimiento_embarazo se
+          WHERE se.id_paciente = p.id_paciente
+        ) as seguimiento_embarazo
+      FROM paciente p
+      INNER JOIN usuario u ON p.id_usuario = u.id_usuario
+      LEFT JOIN nivel_actividad_fisica naf ON p.id_nivel_actividad = naf.id_nivel_actividad
+      LEFT JOIN administrador a ON p.administrador_id_admin = a.id_admin
+      LEFT JOIN usuario au ON a.id_usuario = au.id_usuario
+      LEFT JOIN medico m ON p.id_medico = m.id_medico
+      LEFT JOIN usuario mu ON m.id_usuario = mu.id_usuario
+      WHERE p.id_paciente = $1
+    `, [idPaciente]);
 
-    if (error) {
-      console.error('Error en consulta Supabase (perfilPaciente):', error.message);
-      if (error.code === 'PGRST116') {
-        return response(res, 'error', 404, 'No se encontró el paciente solicitado');
-      }
-      throw error;
+    const p = dataRows[0];
+
+    if (!p) {
+      return response(res, 'error', 404, 'No se encontró el paciente solicitado');
     }
 
     // 3️⃣ Lógica para el seguimiento de embarazo (Replicando el CASE y ORDER BY del SQL)
@@ -283,33 +257,36 @@ const registrosPaciente = async (req, res) => {
       return response(res, 'error', 400, 'El ID del paciente proporcionado no es válido');
     }
 
-    // 2️⃣ Consulta Supabase replicando los LEFT JOINs
-    const { data: registrosBD, error } = await supabase
-      .from('registro_glucosa')
-      .select(`
-        id_registro,
-        fecha,
-        hora,
-        nivel_glucosa,
-        observaciones,
-        momento_dia ( momento ),
-        medico ( 
-          usuario ( nombre_completo ) 
-        ),
-        alertas (
-          id_alerta,
-          tipo_alerta ( tipo ),
-          retroalimentacion ( mensaje )
-        )
-      `)
-      .eq('id_paciente', idPaciente)
-      .order('fecha', { ascending: false }) // ORDER BY rg.fecha DESC
-      .order('hora', { ascending: false }); // ORDER BY rg.hora DESC
-
-    if (error) {
-      console.error('Error en consulta Supabase (registrosPaciente):', error.message);
-      throw error;
-    }
+    // 2️⃣ Consulta SQL
+    const { rows: registrosBD } = await pool.query(`
+      SELECT 
+        rg.id_registro,
+        rg.fecha,
+        rg.hora,
+        rg.nivel_glucosa,
+        rg.observaciones,
+        json_build_object('momento', md.momento) as momento_dia,
+        json_build_object('usuario', json_build_object('nombre_completo', mu.nombre_completo)) as medico,
+        (
+          SELECT json_agg(json_build_object(
+            'id_alerta', a.id_alerta, 
+            'tipo_alerta', json_build_object('tipo', ta.tipo),
+            'retroalimentacion', (
+              SELECT json_agg(json_build_object('mensaje', r.mensaje))
+              FROM retroalimentacion r WHERE r.alertas_id_alerta = a.id_alerta
+            )
+          ))
+          FROM alertas a
+          LEFT JOIN tipo_alerta ta ON a.id_tipo_alerta = ta.id_tipo_alerta
+          WHERE a.id_registro = rg.id_registro
+        ) as alertas
+      FROM registro_glucosa rg
+      LEFT JOIN momento_dia md ON rg.id_momento = md.id_momento
+      LEFT JOIN medico m ON rg.id_medico = m.id_medico
+      LEFT JOIN usuario mu ON m.id_usuario = mu.id_usuario
+      WHERE rg.id_paciente = $1
+      ORDER BY rg.fecha DESC, rg.hora DESC
+    `, [idPaciente]);
 
     // 3️⃣ Si no hay registros, devolvemos arreglo vacío exitosamente
     if (!registrosBD || registrosBD.length === 0) {
@@ -366,29 +343,18 @@ const registrarGlucosa = async (req, res) => {
   }
 
   try {
-    const { data: glucosaData, error: glucosaError } = await supabase
-      .from("registro_glucosa")
-      .insert([
-        {
-          id_paciente,
-         
-          id_momento,
-          fecha,
-          hora,
-          nivel_glucosa,
-          observaciones
-        }
-      ])
-      .select(); // devuelve el registro insertado
+    const { rows: glucosaData } = await pool.query(
+      `INSERT INTO registro_glucosa (id_paciente, id_momento, fecha, hora, nivel_glucosa, observaciones)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [id_paciente, id_momento, fecha, hora, nivel_glucosa, observaciones || null]
+    );
 
-    if (glucosaError) throw glucosaError;
-
-    const registro_glucosa = glucosaData[0]; // el primer registro insertado
+    const registro_glucosa = glucosaData[0]; 
 
     // Retornar el ID generado
     res.status(200).json({
       message: "Registro insertado correctamente",
-      id_registro: registro_glucosa.id, // ⚠️ asumimos que la columna PK es "id"
+      id_registro: registro_glucosa.id_registro, 
       registro_glucosa
     });
 
@@ -423,79 +389,55 @@ const actualizarPaciente = async (req, res) => {
 
   try {
     // Obtener id_paciente desde id_usuario
-    const { data: pacienteData, error: pacienteError } = await supabase
-      .from('paciente')
-      .select('id_paciente')
-      .eq('id_usuario', id_usuario)
-      .single();
+    const { rows: pRows } = await pool.query(`SELECT id_paciente FROM paciente WHERE id_usuario = $1 LIMIT 1`, [id_usuario]);
+    const pacienteData = pRows[0];
 
-    if (pacienteError) throw pacienteError;
     if (!pacienteData) return res.status(404).json({ error: 'Paciente no encontrado' });
 
     const id_paciente = pacienteData.id_paciente;
 
     // Actualizamos tabla usuario
-    const { data: usuarioActualizado, error: errorUsuario } = await supabase
-      .from('usuario')
-      .update({
-        nombre_completo: nombre,
-        correo,
-        teléfono: telefono
-      })
-      .eq('id_usuario', id_usuario)
-      .select()
-      .single();
-
-    if (errorUsuario) throw errorUsuario;
+    const { rows: uRows } = await pool.query(
+      `UPDATE usuario SET nombre_completo = $1, correo = $2, teléfono = $3 WHERE id_usuario = $4 RETURNING *`,
+      [nombre, correo, telefono, id_usuario]
+    );
+    const usuarioActualizado = uRows[0];
 
     // Actualizamos tabla paciente
-    const { data: pacienteActualizado, error: errorPaciente } = await supabase
-      .from('paciente')
-      .update({
-        altura,
-        peso: parseFloat(peso),
-        embarazo: embarazo !== undefined ? embarazo : undefined,
-        nombre_emergencia,
-        numero_emergencia
-      })
-      .eq('id_usuario', id_usuario)
-      .select()
-      .single(); // ⬅️ usar single() para tener un objeto y no array
-
-    if (errorPaciente) throw errorPaciente;
+    let qParts = [`altura = $1`, `peso = $2`, `nombre_emergencia = $3`, `numero_emergencia = $4`];
+    let qVals = [altura, parseFloat(peso), nombre_emergencia, numero_emergencia];
+    let i = 5;
+    if (embarazo !== undefined) {
+      qParts.push(`embarazo = $${i++}`);
+      qVals.push(embarazo);
+    }
+    qVals.push(id_usuario);
+    
+    const { rows: pUpdRows } = await pool.query(
+      `UPDATE paciente SET ${qParts.join(', ')} WHERE id_usuario = $${i} RETURNING *`,
+      qVals
+    );
+    const pacienteActualizado = pUpdRows[0];
 
     // Manejo de seguimiento_embarazo
     if (embarazo === true && semanas_embarazo > 0) {
       // Insertar nuevo seguimiento
-      const { error: errorSeguimiento } = await supabase
-        .from('seguimiento_embarazo')
-        .insert({
-          id_paciente,
-          fecha_registro: new Date().toISOString().split('T')[0],
-          semanas_embarazo,
-          fecha_terminacion: null
-        });
-      if (errorSeguimiento) throw errorSeguimiento;
+      await pool.query(
+        `INSERT INTO seguimiento_embarazo (id_paciente, fecha_registro, semanas_embarazo, fecha_terminacion) VALUES ($1, $2, $3, null)`,
+        [id_paciente, new Date().toISOString().split('T')[0], semanas_embarazo]
+      );
     } else if (embarazo === false && fecha_terminacion) {
       // Obtener el seguimiento más reciente activo
-      const { data: seguimientosActivos, error: errorFetch } = await supabase
-        .from('seguimiento_embarazo')
-        .select('id_seguimiento')
-        .eq('id_paciente', id_paciente)
-        .is('fecha_terminacion', null)
-        .order('fecha_registro', { ascending: false })
-        .limit(1);
+      const { rows: segActivos } = await pool.query(
+        `SELECT id_seguimiento FROM seguimiento_embarazo WHERE id_paciente = $1 AND fecha_terminacion IS NULL ORDER BY fecha_registro DESC LIMIT 1`,
+        [id_paciente]
+      );
 
-      if (errorFetch) throw errorFetch;
-
-      if (seguimientosActivos && seguimientosActivos.length > 0) {
-        const id_seguimiento = seguimientosActivos[0].id_seguimiento;
-        const { error: errorUpdate } = await supabase
-          .from('seguimiento_embarazo')
-          .update({ fecha_terminacion })
-          .eq('id_seguimiento', id_seguimiento);
-
-        if (errorUpdate) throw errorUpdate;
+      if (segActivos && segActivos.length > 0) {
+        await pool.query(
+          `UPDATE seguimiento_embarazo SET fecha_terminacion = $1 WHERE id_seguimiento = $2`,
+          [fecha_terminacion, segActivos[0].id_seguimiento]
+        );
       }
     }
 
@@ -520,21 +462,16 @@ const obtenerSemanasEmbarazoActual = async (req, res) => {
 
   try {
     // 2️⃣ Obtener si el paciente está embarazado
-    const { data: dataPaciente, error: errorPaciente } = await supabase
-      .from("paciente")
-      .select("embarazo")
-      .eq("id_paciente", id_paciente)
-      .single();
+    const { rows: pRows } = await pool.query(
+      `SELECT embarazo FROM paciente WHERE id_paciente = $1 LIMIT 1`,
+      [id_paciente]
+    );
 
-    if (errorPaciente) {
-      // Supabase lanza 'PGRST116' cuando el .single() no encuentra nada
-      if (errorPaciente.code === 'PGRST116') {
-        return response(res, 'error', 404, 'Paciente no encontrado en el sistema');
-      }
-      throw errorPaciente;
+    if (!pRows || pRows.length === 0) {
+      return response(res, 'error', 404, 'Paciente no encontrado en el sistema');
     }
 
-    const embarazo = dataPaciente.embarazo;
+    const embarazo = pRows[0].embarazo;
 
     // 3️⃣ Si NO está embarazado
     if (embarazo !== true) {
@@ -544,15 +481,10 @@ const obtenerSemanasEmbarazoActual = async (req, res) => {
     }
 
     // 4️⃣ Si SÍ está embarazado, obtener el último registro activo
-    const { data: dataEmbarazo, error: errorEmbarazo } = await supabase
-      .from("seguimiento_embarazo")
-      .select("fecha_registro, semanas_embarazo")
-      .eq("id_paciente", id_paciente)
-      .is("fecha_terminacion", null)
-      .order("fecha_registro", { ascending: false })
-      .limit(1);
-
-    if (errorEmbarazo) throw errorEmbarazo;
+    const { rows: dataEmbarazo } = await pool.query(
+      `SELECT fecha_registro, semanas_embarazo FROM seguimiento_embarazo WHERE id_paciente = $1 AND fecha_terminacion IS NULL ORDER BY fecha_registro DESC LIMIT 1`,
+      [id_paciente]
+    );
 
     if (!dataEmbarazo || dataEmbarazo.length === 0) {
       // Es un paciente con estado embarazo=true, pero sin registros activos (quizás faltó crearlo)

@@ -1,4 +1,4 @@
-const supabase = require('../../database'); // tu cliente Supabase
+const pool = require('../../database');
 const bcrypt = require('bcrypt');
 const response = (res, status, code, message, data = null) => {
   return res.status(code).json({
@@ -27,57 +27,30 @@ const registrarMedico = async (req, res) => {
     const pdf = pdfFiles[0];
     const img = imgFiles[0];
 
-    // 2️⃣ Subir archivos a Supabase
-    const pdfUpload = await supabase.storage
-      .from("Matriculas_PDF")
-      .upload(`pdfs/${Date.now()}_${pdf.originalname}`, pdf.buffer, { contentType: pdf.mimetype });
-
-    const imgUpload = await supabase.storage
-      .from("Carnets_IMG")
-      .upload(`imgs/${Date.now()}_${img.originalname}`, img.buffer, { contentType: img.mimetype });
-
-    if (pdfUpload.error) throw pdfUpload.error;
-    if (imgUpload.error) throw imgUpload.error;
-
-    const pdfUrl = supabase.storage.from("Matriculas_PDF").getPublicUrl(pdfUpload.data.path).data.publicUrl;
-    const imgUrl = supabase.storage.from("Carnets_IMG").getPublicUrl(imgUpload.data.path).data.publicUrl;
+    // 2️⃣ Subir archivos (TODO: Implementar S3)
+    const pdfUrl = "https://placeholder.com/pdf";
+    const imgUrl = "https://placeholder.com/img";
 
     // 3️⃣ Hashear contraseña
     const hashed_contrasena = await bcrypt.hash(contrasena, 10);
     const rol = 'medico';
 
     // 4️⃣ Insertar usuario
-    const { data: usuarioData, error: usuarioError } = await supabase
-      .from("usuario")
-      .insert([{
-        nombre_completo,
-        correo,
-        contrasena: hashed_contrasena,
-        rol,
-        "teléfono": telefono,
-        fecha_nac
-      }])
-      .select();
-
-    if (usuarioError) throw usuarioError;
-    const usuario = usuarioData[0];
+    const { rows: uRows } = await pool.query(
+      `INSERT INTO usuario (nombre_completo, correo, contrasena, rol, "teléfono", fecha_nac)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [nombre_completo, correo, hashed_contrasena, rol, telefono, fecha_nac]
+    );
+    const usuario = uRows[0];
 
     // 5️⃣ Insertar médico
-    const { data: medicoData, error: medicoError } = await supabase
-      .from('medico')
-      .insert([{
-        id_usuario: usuario.id_usuario,
-        id_especialidad,
-        matricula_profesional: pdfUrl,
-        departamento,
-        carnet_profesional: imgUrl,
-        administrador_id_admin: 1
-      }])
-      .select();
+    const { rows: mRows } = await pool.query(
+      `INSERT INTO medico (id_usuario, id_especialidad, matricula_profesional, departamento, carnet_profesional, administrador_id_admin)
+       VALUES ($1, $2, $3, $4, $5, 1) RETURNING *`,
+      [usuario.id_usuario, id_especialidad, pdfUrl, departamento, imgUrl]
+    );
 
-    if (medicoError) throw medicoError;
-
-    res.status(200).json({ mensaje: "Médico registrado correctamente", usuario, medico: medicoData[0] });
+    res.status(200).json({ mensaje: "Médico registrado correctamente", usuario, medico: mRows[0] });
 
   } catch (error) {
     console.error("❌ Error en registrarMedico:", error);
@@ -92,14 +65,11 @@ module.exports = { registrarMedico };
 
 const verMedicos = async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('medico')
-      .select(`
-        id_medico,
-        usuario ( nombre_completo )
-      `);
-
-    if (error) throw error;
+    const { rows: data } = await pool.query(`
+      SELECT m.id_medico, json_build_object('nombre_completo', u.nombre_completo) as usuario
+      FROM medico m
+      INNER JOIN usuario u ON m.id_usuario = u.id_usuario
+    `);
 
     res.status(200).json(data);
   } catch (error) {
@@ -119,34 +89,25 @@ const perfilMedico = async (req, res) => {
       return response(res, 'error', 400, 'El ID de usuario proporcionado no es válido');
     }
 
-    // 1️⃣ Consulta Relacional con Supabase
-    // Traemos datos del médico, cruzamos con su usuario, y cruzamos con el administrador (y el usuario del admin)
-    const { data: medicoData, error } = await supabase
-      .from('medico')
-      .select(`
-        id_medico,
-        matricula_profesional,
-        departamento,
-        carnet_profesional,
-        usuario!inner (
-          nombre_completo,
-          fecha_nac,
-          teléfono,
-          correo
-        ),
-        administrador (
-          usuario (
-            nombre_completo
-          )
-        )
-      `)
-      .eq('id_usuario', idUsuario)
-      .maybeSingle(); // 👈 Devuelve el objeto directo o null si no hay coincidencias
-
-    if (error) {
-      console.error('Error en consulta Supabase:', error.message);
-      throw error;
-    }
+    // 1️⃣ Consulta Relacional con SQL
+    const { rows: dataRows } = await pool.query(`
+      SELECT 
+        m.id_medico,
+        m.matricula_profesional,
+        m.departamento,
+        m.carnet_profesional,
+        u.nombre_completo as nombre,
+        u.fecha_nac as "fechaNac",
+        u.teléfono as telefono,
+        u.correo,
+        ua.nombre_completo as "admitidoPor"
+      FROM medico m
+      INNER JOIN usuario u ON m.id_usuario = u.id_usuario
+      LEFT JOIN administrador a ON m.administrador_id_admin = a.id_admin
+      LEFT JOIN usuario ua ON a.id_usuario = ua.id_usuario
+      WHERE m.id_usuario = $1
+    `, [idUsuario]);
+    const medicoData = dataRows[0] || null;
 
     // 2️⃣ Validación de existencia
     if (!medicoData) {
@@ -157,15 +118,14 @@ const perfilMedico = async (req, res) => {
     // Mapeamos el resultado para que mantenga exactamente las mismas llaves que devolvía tu SQL
     const perfilFormateado = {
       id: medicoData.id_medico,
-      nombre: medicoData.usuario?.nombre_completo,
-      fechaNac: medicoData.usuario?.fecha_nac,
-      telefono: medicoData.usuario?.teléfono,
-      correo: medicoData.usuario?.correo,
+      nombre: medicoData.nombre,
+      fechaNac: medicoData.fechaNac,
+      telefono: medicoData.telefono,
+      correo: medicoData.correo,
       matricula: medicoData.matricula_profesional,
       departamento: medicoData.departamento,
       carnet: medicoData.carnet_profesional,
-      // Manejo seguro del COALESCE usando encadenamiento opcional
-      admin: medicoData.administrador?.usuario?.nombre_completo || 'No' 
+      admin: medicoData.admitidoPor || 'No' 
     };
 
     // 4️⃣ Respuesta Exitosa
@@ -192,30 +152,62 @@ const verPacientes = async (req, res) => {
   }
 
   try {
-    // 1️⃣ CONSULTA RELACIONAL CON SUPABASE
-    // Usamos '!inner' en usuario para forzar un INNER JOIN y filtrar solo pacientes activos
-    const { data: pacientesBD, error } = await supabase
-      .from('paciente')
-      .select(`
-        id_paciente, genero, peso, altura, numero_emergencia, nombre_emergencia, foto_perfil,
-        usuario!inner ( id_usuario, nombre_completo, fecha_nac, teléfono, correo, estado ),
-        nivel_actividad_fisica ( descripcion ),
-        paciente_enfermedad ( enfermedades_base ( nombre_enfermedad ) ),
-        tratamiento_enfermedad ( dosis, tratamientos ( nombre_tratamiento, descripcion ) ),
-        registro_glucosa (
-          id_registro, fecha, hora, nivel_glucosa, observaciones,
-          momento_dia ( momento ),
-          alertas (
-            id_alerta, 
-            tipo_alerta ( tipo ),
-            retroalimentacion ( mensaje )
-          )
-        )
-      `)
-      .eq('id_medico', parseInt(idMedico))
-      .eq('usuario.estado', true);
-
-    if (error) throw error;
+    // 1️⃣ CONSULTA RELACIONAL CON SQL
+    const { rows: pacientesBD } = await pool.query(`
+      SELECT 
+        p.id_paciente, p.genero, p.peso, p.altura, p.numero_emergencia, p.nombre_emergencia, p.foto_perfil,
+        json_build_object(
+          'id_usuario', u.id_usuario, 
+          'nombre_completo', u.nombre_completo, 
+          'fecha_nac', u.fecha_nac, 
+          'teléfono', u.teléfono, 
+          'correo', u.correo, 
+          'estado', u.estado
+        ) as usuario,
+        json_build_object('descripcion', naf.descripcion) as nivel_actividad_fisica,
+        (
+          SELECT json_agg(json_build_object('enfermedades_base', json_build_object('nombre_enfermedad', eb.nombre_enfermedad)))
+          FROM paciente_enfermedad pe
+          JOIN enfermedades_base eb ON pe.id_enfermedad = eb.id_enfermedad
+          WHERE pe.id_paciente = p.id_paciente
+        ) as paciente_enfermedad,
+        (
+          SELECT json_agg(json_build_object('dosis', te.dosis, 'tratamientos', json_build_object('nombre_tratamiento', t.nombre_tratamiento, 'descripcion', t.descripcion)))
+          FROM tratamiento_enfermedad te
+          JOIN tratamientos t ON te.id_tratamiento = t.id_tratamiento
+          WHERE te.id_paciente = p.id_paciente
+        ) as tratamiento_enfermedad,
+        (
+          SELECT json_agg(json_build_object(
+            'id_registro', rg.id_registro, 
+            'fecha', rg.fecha, 
+            'hora', rg.hora, 
+            'nivel_glucosa', rg.nivel_glucosa, 
+            'observaciones', rg.observaciones,
+            'momento_dia', json_build_object('momento', md.momento),
+            'alertas', (
+              SELECT json_agg(json_build_object(
+                'id_alerta', a.id_alerta, 
+                'tipo_alerta', json_build_object('tipo', ta.tipo),
+                'retroalimentacion', (
+                  SELECT json_agg(json_build_object('mensaje', r.mensaje))
+                  FROM retroalimentacion r WHERE r.alertas_id_alerta = a.id_alerta
+                )
+              ))
+              FROM alertas a
+              LEFT JOIN tipo_alerta ta ON a.id_tipo_alerta = ta.id_tipo_alerta
+              WHERE a.id_registro = rg.id_registro
+            )
+          ))
+          FROM registro_glucosa rg
+          LEFT JOIN momento_dia md ON rg.id_momento = md.id_momento
+          WHERE rg.id_paciente = p.id_paciente
+        ) as registro_glucosa
+      FROM paciente p
+      INNER JOIN usuario u ON p.id_usuario = u.id_usuario
+      LEFT JOIN nivel_actividad_fisica naf ON p.id_nivel_actividad = naf.id_nivel_actividad
+      WHERE p.id_medico = $1 AND u.estado = true
+    `, [parseInt(idMedico)]);
 
     if (!pacientesBD || pacientesBD.length === 0) {
       return response(res, 'success', 200, "El médico aún no tiene pacientes asignados.", []);
@@ -315,38 +307,35 @@ const alertasActivas = async (req, res) => {
       return response(res, 'error', 400, 'El ID del médico proporcionado no es válido');
     }
 
-    // 1️⃣ Consulta Supabase replicando tu SQL exacto
-    const { data: alertasBD, error } = await supabase
-      .from('alertas')
-      .select(`
-        id_alerta,
-        estado,
-        fecha_alerta,
-        tipo_alerta!inner ( tipo ),
-        registro_glucosa!inner (
-          id_registro,
-          fecha,
-          hora,
-          nivel_glucosa,
-          observaciones,
-          momento_dia ( momento ),
-          paciente!inner (
-            id_paciente,
-            id_medico,
-            usuario!inner ( nombre_completo )
+    // 1️⃣ Consulta SQL
+    const { rows: alertasBD } = await pool.query(`
+      SELECT 
+        a.id_alerta,
+        a.estado,
+        a.fecha_alerta,
+        json_build_object('tipo', ta.tipo) as tipo_alerta,
+        json_build_object(
+          'id_registro', rg.id_registro,
+          'fecha', rg.fecha,
+          'hora', rg.hora,
+          'nivel_glucosa', rg.nivel_glucosa,
+          'observaciones', rg.observaciones,
+          'momento_dia', json_build_object('momento', md.momento),
+          'paciente', json_build_object(
+            'id_paciente', p.id_paciente,
+            'id_medico', p.id_medico,
+            'usuario', json_build_object('nombre_completo', u.nombre_completo)
           )
-        )
-      `)
-      .eq('estado', true) // a.estado = true
-      // 🔥 AQUÍ ESTÁ TU LÓGICA: p.id_medico = 2
-      .eq('registro_glucosa.paciente.id_medico', idMedico) 
-      // 🔥 AQUÍ ESTÁ TU ORDEN: order by a.fecha_alerta desc
-      .order('fecha_alerta', { ascending: false });
-
-    if (error) {
-      console.error('Error en consulta Supabase:', error.message);
-      throw error;
-    }
+        ) as registro_glucosa
+      FROM alertas a
+      INNER JOIN tipo_alerta ta ON a.id_tipo_alerta = ta.id_tipo_alerta
+      INNER JOIN registro_glucosa rg ON a.id_registro = rg.id_registro
+      LEFT JOIN momento_dia md ON rg.id_momento = md.id_momento
+      INNER JOIN paciente p ON rg.id_paciente = p.id_paciente
+      INNER JOIN usuario u ON p.id_usuario = u.id_usuario
+      WHERE a.estado = true AND p.id_medico = $1
+      ORDER BY a.fecha_alerta DESC
+    `, [idMedico]);
 
     if (!alertasBD || alertasBD.length === 0) {
       return response(res, 'success', 200, 'No hay alertas activas en este momento', []);
@@ -381,37 +370,39 @@ const alertasResueltas = async (req, res) => {
       return response(res, 'error', 400, 'El ID del médico proporcionado no es válido');
     }
 
-    // 1️⃣ Consulta Supabase replicando tu lógica SQL (con estado = false)
-    const { data: alertasBD, error } = await supabase
-      .from('alertas')
-      .select(`
-        id_alerta,
-        estado,
-        fecha_alerta,
-        tipo_alerta!inner ( tipo ),
-        registro_glucosa!inner (
-          id_registro,
-          fecha,
-          hora,
-          nivel_glucosa,
-          observaciones,
-          momento_dia ( momento ),
-          paciente!inner (
-            id_paciente,
-            id_medico,
-            usuario!inner ( nombre_completo )
+    // 1️⃣ Consulta SQL
+    const { rows: alertasBD } = await pool.query(`
+      SELECT 
+        a.id_alerta,
+        a.estado,
+        a.fecha_alerta,
+        json_build_object('tipo', ta.tipo) as tipo_alerta,
+        json_build_object(
+          'id_registro', rg.id_registro,
+          'fecha', rg.fecha,
+          'hora', rg.hora,
+          'nivel_glucosa', rg.nivel_glucosa,
+          'observaciones', rg.observaciones,
+          'momento_dia', json_build_object('momento', md.momento),
+          'paciente', json_build_object(
+            'id_paciente', p.id_paciente,
+            'id_medico', p.id_medico,
+            'usuario', json_build_object('nombre_completo', u.nombre_completo)
           )
-        ),
-        retroalimentacion ( mensaje ) 
-      `)
-      .eq('estado', false) // 🔥 Solo alertas resueltas
-      .eq('registro_glucosa.paciente.id_medico', idMedico) // 🔥 Filtro corregido apuntando al paciente
-      .order('fecha_alerta', { ascending: false }); // 🔥 Ordenamos de la más reciente a la más antigua
-
-    if (error) {
-      console.error('Error en consulta Supabase (alertasResueltas):', error.message);
-      throw error;
-    }
+        ) as registro_glucosa,
+        (
+          SELECT json_agg(json_build_object('mensaje', r.mensaje))
+          FROM retroalimentacion r WHERE r.alertas_id_alerta = a.id_alerta
+        ) as retroalimentacion
+      FROM alertas a
+      INNER JOIN tipo_alerta ta ON a.id_tipo_alerta = ta.id_tipo_alerta
+      INNER JOIN registro_glucosa rg ON a.id_registro = rg.id_registro
+      LEFT JOIN momento_dia md ON rg.id_momento = md.id_momento
+      INNER JOIN paciente p ON rg.id_paciente = p.id_paciente
+      INNER JOIN usuario u ON p.id_usuario = u.id_usuario
+      WHERE a.estado = false AND p.id_medico = $1
+      ORDER BY a.fecha_alerta DESC
+    `, [idMedico]);
 
     if (!alertasBD || alertasBD.length === 0) {
       return response(res, 'success', 200, 'No hay alertas resueltas en el historial', []);
@@ -452,28 +443,16 @@ const retroalimentacionAlerta = async (req, res) => {
 
   try {
     // 2️⃣ INSERT en Retroalimentacion
-    const { data: retroData, error: retroError } = await supabase
-      .from('retroalimentacion')
-      .insert([
-        {
-          id_medico,
-          fecha_registro,
-          mensaje,
-          alertas_id_alerta
-        }
-      ])
-      .select();
-
-    if (retroError) throw retroError;
+    const { rows: retroData } = await pool.query(
+      `INSERT INTO retroalimentacion (id_medico, fecha_registro, mensaje, alertas_id_alerta) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [id_medico, fecha_registro, mensaje, alertas_id_alerta]
+    );
 
     // 3️⃣ UPDATE en Alertas, poniendo su estado = false (Resuelta)
-    const { data: alertaUpdate, error: alertaError } = await supabase
-      .from('alertas')
-      .update({ estado: false })
-      .eq('id_alerta', alertas_id_alerta)
-      .select();
-
-    if (alertaError) throw alertaError;
+    const { rows: alertaUpdate } = await pool.query(
+      `UPDATE alertas SET estado = false WHERE id_alerta = $1 RETURNING *`,
+      [alertas_id_alerta]
+    );
 
     // 4️⃣ Respuesta exitosa estandarizada
     // Pasamos un objeto con ambas datas dentro del parámetro "data" de nuestra función response
@@ -513,22 +492,11 @@ const registrarGlucosaMedico = async (req, res) => {
 
   try {
     // 2️⃣ Inserción en la base de datos
-    const { data: glucosaData, error: glucosaError } = await supabase
-      .from("registro_glucosa")
-      .insert([
-        {
-          id_paciente: parseInt(id_paciente),
-          id_medico: parseInt(id_medico),
-          id_momento: parseInt(id_momento),
-          fecha,
-          hora,
-          nivel_glucosa: parseFloat(nivel_glucosa),
-          observaciones: observaciones || null
-        }
-      ])
-      .select();
-
-    if (glucosaError) throw glucosaError;
+    const { rows: glucosaData } = await pool.query(
+      `INSERT INTO registro_glucosa (id_paciente, id_medico, id_momento, fecha, hora, nivel_glucosa, observaciones)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [parseInt(id_paciente), parseInt(id_medico), parseInt(id_momento), fecha, hora, parseFloat(nivel_glucosa), observaciones || null]
+    );
 
     const registro_glucosa = glucosaData[0];
 
@@ -564,13 +532,10 @@ const actualizarMedico = async (req, res) => {
 
   try {
     // 1️⃣ Obtener id_usuario del médico para poder actualizar la tabla de usuarios
-    const { data: medico, error: medicoFetchError } = await supabase
-      .from('medico')
-      .select('id_usuario')
-      .eq('id_medico', id_medico)
-      .single();
+    const { rows: medicoRows } = await pool.query(`SELECT id_usuario FROM medico WHERE id_medico = $1`, [id_medico]);
+    const medico = medicoRows[0];
 
-    if (medicoFetchError || !medico) {
+    if (!medico) {
       return response(res, 'error', 404, 'Médico no encontrado en el sistema');
     }
 
@@ -584,49 +549,30 @@ const actualizarMedico = async (req, res) => {
     const medicoUpdates = {};
     if (departamento !== undefined) medicoUpdates.departamento = departamento;
 
-    // 3️⃣ Gestión del archivo (Carnet Profesional)
+    // 3️⃣ Gestión del archivo (Carnet Profesional) (Comentado para migración a AWS S3)
     if (carnetFile) {
       // Generamos un nombre único para evitar sobreescritura accidental
       const extension = carnetFile.originalname.split('.').pop();
       const fileName = `carnet-${id_usuario}-${Date.now()}.${extension}`;
       
-      const { data: uploadData, error: uploadError } = await supabase
-        .storage
-        .from('Carnets_IMG')
-        .upload(fileName, carnetFile.buffer, {
-          contentType: carnetFile.mimetype,
-          upsert: true
-        });
 
-      if (uploadError) throw uploadError;
-
-      // Obtener la URL pública del nuevo archivo
-      const { data: urlData } = supabase
-        .storage
-        .from('Carnets_IMG')
-        .getPublicUrl(uploadData.path);
-
-      medicoUpdates.carnet_profesional = urlData.publicUrl;
+      medicoUpdates.carnet_profesional = "https://placeholder.url/carnet.jpg"; // FIXME: AWS S3
     }
 
     // 4️⃣ Ejecutar actualizaciones en la tabla 'usuario'
     if (Object.keys(usuarioUpdates).length > 0) {
-      const { error: errorUsuario } = await supabase
-        .from('usuario')
-        .update(usuarioUpdates)
-        .eq('id_usuario', id_usuario);
-      
-      if (errorUsuario) throw errorUsuario;
+      const keys = Object.keys(usuarioUpdates);
+      const values = keys.map(k => usuarioUpdates[k]);
+      const setClause = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ');
+      await pool.query(`UPDATE usuario SET ${setClause} WHERE id_usuario = $${keys.length + 1}`, [...values, id_usuario]);
     }
 
     // 5️⃣ Ejecutar actualizaciones en la tabla 'medico'
     if (Object.keys(medicoUpdates).length > 0) {
-      const { error: errorMedico } = await supabase
-        .from('medico')
-        .update(medicoUpdates)
-        .eq('id_medico', id_medico);
-      
-      if (errorMedico) throw errorMedico;
+      const keys = Object.keys(medicoUpdates);
+      const values = keys.map(k => medicoUpdates[k]);
+      const setClause = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ');
+      await pool.query(`UPDATE medico SET ${setClause} WHERE id_medico = $${keys.length + 1}`, [...values, id_medico]);
     }
 
     // 6️⃣ Respuesta exitosa estandarizada

@@ -1,4 +1,4 @@
-const supabase = require('../../database'); // tu cliente Supabase
+const pool = require('../../database');
 
 
 const response = (res, status, code, message, data = null) => {
@@ -15,31 +15,28 @@ const datosParaGlucosa = async (req, res) => {
   }
 
   try {
-    // 1️⃣ Consulta Relacional con Supabase (Reemplazo del RPC)
-    const { data: p, error } = await supabase
-      .from('paciente')
-      .select(`
-        id_paciente,
-        embarazo,
-        id_medico,
-        usuario!inner (
-          fecha_nac
-        ),
-        paciente_enfermedad (
-          enfermedades_base (
-            nombre_enfermedad
-          )
-        )
-      `)
-      .eq('id_paciente', idPaciente)
-      .single();
+    // 1️⃣ Consulta Relacional con SQL
+    const { rows: dataRows } = await pool.query(`
+      SELECT 
+        p.id_paciente,
+        p.embarazo,
+        p.id_medico,
+        json_build_object('fecha_nac', u.fecha_nac) as usuario,
+        (
+          SELECT json_agg(json_build_object('enfermedades_base', json_build_object('nombre_enfermedad', eb.nombre_enfermedad)))
+          FROM paciente_enfermedad pe
+          JOIN enfermedades_base eb ON pe.id_enfermedad = eb.id_enfermedad
+          WHERE pe.id_paciente = p.id_paciente
+        ) as paciente_enfermedad
+      FROM paciente p
+      INNER JOIN usuario u ON p.id_usuario = u.id_usuario
+      WHERE p.id_paciente = $1
+    `, [idPaciente]);
 
-    if (error) {
-      console.error('Error en consulta Supabase (datosParaGlucosa):', error.message);
-      if (error.code === 'PGRST116') {
-        return response(res, 'error', 404, 'No se encontró el paciente en el sistema');
-      }
-      throw error;
+    const p = dataRows[0];
+
+    if (!p) {
+      return response(res, 'error', 404, 'No se encontró el paciente en el sistema');
     }
 
     // 2️⃣ Calcular la edad en Node.js (Reemplazo de date_part y age de PostgreSQL)
@@ -92,65 +89,52 @@ const registrarAlerta = async (req, res) => {
 
   try {
     // 1️⃣ Insertar alerta
-    const { data, error } = await supabase
-      .from('alertas')
-      .insert([
-        {
-          id_tipo_alerta,
-          id_registro,
-          id_medico,
-          fecha_alerta
-        }
-      ])
-      .select();
-
-    if (error) throw error;
+    const { rows: data } = await pool.query(
+      `INSERT INTO alertas (id_tipo_alerta, id_registro, id_medico, fecha_alerta)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [id_tipo_alerta, id_registro, id_medico, fecha_alerta]
+    );
 
     const alertaInsertada = data[0];
 
     // Obtener registro de glucosa
-    const { data: registro } = await supabase
-      .from("registro_glucosa")
-      .select("id_paciente, nivel_glucosa, fecha, hora, observaciones")
-      .eq("id_registro", id_registro)
-      .single();
-
+    const { rows: rgRows } = await pool.query(
+      `SELECT id_paciente, nivel_glucosa, fecha, hora, observaciones FROM registro_glucosa WHERE id_registro = $1 LIMIT 1`,
+      [id_registro]
+    );
+    const registro = rgRows[0];
     if (!registro) throw new Error("Registro de glucosa no encontrado");
 
     // Obtener paciente
-    const { data: paciente } = await supabase
-      .from("paciente")
-      .select("id_usuario, id_medico")
-      .eq("id_paciente", registro.id_paciente)
-      .single();
-
+    const { rows: pRows } = await pool.query(
+      `SELECT id_usuario, id_medico FROM paciente WHERE id_paciente = $1 LIMIT 1`,
+      [registro.id_paciente]
+    );
+    const paciente = pRows[0];
     if (!paciente) throw new Error("Paciente no encontrado");
 
     // Obtener médico asignado
-    const { data: medico } = await supabase
-      .from("medico")
-      .select("id_usuario")
-      .eq("id_medico", paciente.id_medico)
-      .single();
-
+    const { rows: mRows } = await pool.query(
+      `SELECT id_usuario FROM medico WHERE id_medico = $1 LIMIT 1`,
+      [paciente.id_medico]
+    );
+    const medico = mRows[0];
     if (!medico) throw new Error("Médico asignado no encontrado");
 
     // Obtener correo del usuario del médico
-    const { data: usuarioMedico } = await supabase
-      .from("usuario")
-      .select("correo, nombre_completo")
-      .eq("id_usuario", medico.id_usuario)
-      .single();
-
+    const { rows: uRows } = await pool.query(
+      `SELECT correo, nombre_completo FROM usuario WHERE id_usuario = $1 LIMIT 1`,
+      [medico.id_usuario]
+    );
+    const usuarioMedico = uRows[0];
     if (!usuarioMedico) throw new Error("Usuario del médico no encontrado");
     
     // Obtener nombre del PACIENTE (usuario del paciente)
-    const { data: usuarioPaciente } = await supabase
-      .from("usuario")
-      .select("nombre_completo")
-      .eq("id_usuario", paciente.id_usuario)
-      .single();
-
+    const { rows: upRows } = await pool.query(
+      `SELECT nombre_completo FROM usuario WHERE id_usuario = $1 LIMIT 1`,
+      [paciente.id_usuario]
+    );
+    const usuarioPaciente = upRows[0];
     if (!usuarioPaciente) throw new Error("Usuario del paciente no encontrado");
 
     const datosCorreo = {

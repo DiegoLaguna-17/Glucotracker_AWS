@@ -1,12 +1,6 @@
 // middleware/getPermisos.js
 
-const supabase = require('../../database');
-
-// Asegúrate de tener importada tu conexión a Supabase
-// const supabase = require('../../database'); 
-
-// Asegúrate de tener importada tu conexión a Supabase
-// const supabase = require('../../database'); 
+const pool = require('../../database');
 
 const getPermisos = async (req, res, next) => {
   try {
@@ -18,25 +12,24 @@ const getPermisos = async (req, res, next) => {
 
     const id_usuario = req.usuario.id_usuario;
 
-    // 2. Consultamos la tabla, pero ahora pedimos también la columna 'activo' en rol_permiso
-    const { data, error } = await supabase
-      .from('usuario_rol')
-      .select(`
-        roles (
-          rol_permiso (
-            activo,
-            permiso (
-              nombre
-            )
+    // 2. Consultamos la tabla mediante un JOIN con SQL
+    const { rows: dataRows } = await pool.query(`
+      SELECT 
+        json_build_object(
+          'rol_permiso', (
+            SELECT json_agg(json_build_object(
+              'activo', rp.activo,
+              'permiso', json_build_object('nombre', p.nombre)
+            ))
+            FROM rol_permiso rp
+            INNER JOIN permiso p ON rp.id_permiso = p.id_permiso
+            WHERE rp.id_rol = ur.id_rol
           )
-        )
-      `)
-      .eq('id_usuario', id_usuario);
-
-    if (error) {
-      console.error('Error de Supabase consultando roles:', error);
-      throw error;
-    }
+        ) as roles
+      FROM usuario_rol ur
+      WHERE ur.id_usuario = $1
+    `, [id_usuario]);
+    const data = dataRows;
 
     // 3. Si no trae datos (el usuario no tiene un rol asignado)
     if (!data || data.length === 0) {
@@ -83,16 +76,13 @@ const getPermisosPacientes = async (req, res, next) => {
     const id_usuario = req.usuario.id_usuario; 
     console.log('2. Buscando permisos en BD para id_usuario:', id_usuario);
 
-    const { data, error } = await supabase
-      .from('usuario_permiso')
-      .select(`
-        permiso (
-          nombre
-        )
-      `)
-      .eq('id_usuario', id_usuario);
-
-    if (error) throw error;
+    const { rows: dataRows } = await pool.query(`
+      SELECT json_build_object('nombre', p.nombre) as permiso
+      FROM usuario_permiso up
+      INNER JOIN permiso p ON up.id_permiso = p.id_permiso
+      WHERE up.id_usuario = $1
+    `, [id_usuario]);
+    const data = dataRows;
 
     console.log('3. Respuesta cruda de Supabase:', JSON.stringify(data));
 

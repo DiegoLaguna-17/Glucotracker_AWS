@@ -1,15 +1,10 @@
-const supabase = require('../../database'); // tu cliente Supabase
 const { verMedicos } = require('./medico.controller');
-
+const pool =require("../../database")
 const verMomentos = async (req, res) => {
     try {
-        const { data, error } = await supabase
-            .from("momento_dia")
-            .select(`
-                id_momento, momento 
-            `);
-
-        if (error) throw error;
+        const { rows: data } = await pool.query(
+            `SELECT id_momento, momento FROM momento_dia`
+        );
 
         res.status(200).json(data);
     } catch (error) {
@@ -21,9 +16,9 @@ const verMomentos = async (req, res) => {
 
 const verNiveles = async (req, res) => {
     try {
-        const { data, error } = await supabase
-            .from('nivel_actividad_fisica').select('id_nivel_actividad,descripcion')
-        if (error) throw error;
+        const { rows: data } = await pool.query(
+            `SELECT id_nivel_actividad, descripcion FROM nivel_actividad_fisica`
+        );
 
         res.status(200).json(data);
     } catch (error) {
@@ -35,9 +30,9 @@ const verNiveles = async (req, res) => {
 
 const verEnfermedades = async (req, res) => {
     try {
-        const { data, error } = await supabase
-            .from('enfermedades_base').select('id_enfermedad,nombre_enfermedad')
-        if (error) throw error;
+        const { rows: data } = await pool.query(
+            `SELECT id_enfermedad, nombre_enfermedad FROM enfermedades_base`
+        );
 
         res.status(200).json(data);
     } catch (error) {
@@ -50,9 +45,9 @@ const verEnfermedades = async (req, res) => {
 
 const verTratamientos = async (req, res) => {
     try {
-        const { data, error } = await supabase
-            .from('tratamientos').select('id_tratamiento,nombre_tratamiento,descripcion')
-        if (error) throw error;
+        const { rows: data } = await pool.query(
+            `SELECT id_tratamiento, nombre_tratamiento, descripcion FROM tratamientos`
+        );
 
         res.status(200).json(data);
     } catch (error) {
@@ -64,9 +59,9 @@ const verTratamientos = async (req, res) => {
 
 const verEspecialidades = async (req, res) => {
     try {
-        const { data, error } = await supabase
-            .from('especialidad').select('id_especialidad,nombre')
-        if (error) throw error;
+        const { rows: data } = await pool.query(
+            `SELECT id_especialidad, nombre FROM especialidad`
+        );
 
         res.status(200).json(data);
     } catch (error) {
@@ -77,22 +72,23 @@ const verEspecialidades = async (req, res) => {
 
 const verAuditoria = async (req, res) => {
   try {
-    const { data: auditoria, error: auditoriaError } = await supabase
-        .from('auditoria_endpoints')
-        .select(`
-            *,
-            usuario(nombre_completo)
-        `);
+    const query = `
+      SELECT 
+        ae.*,
+        u.nombre_completo
+      FROM auditoria_endpoints ae
+      LEFT JOIN usuario u ON ae.id_usuario = u.id_usuario
+      ORDER BY ae.id DESC;
+    `;
 
-    if (auditoriaError) throw auditoriaError;
+    const result = await pool.query(query);
 
-    // Devuelve los registros tal cual están en la tabla
-    return res.status(200).json(auditoria);
+    return res.status(200).json(result.rows);
 
   } catch (error) {
-    console.error('Error obteniendo auditoría:', error);
+    console.error("Error obteniendo auditoría:", error);
     return res.status(500).json({
-      message: 'Error obteniendo auditoría',
+      message: "Error obteniendo auditoría",
       error: error.message
     });
   }
