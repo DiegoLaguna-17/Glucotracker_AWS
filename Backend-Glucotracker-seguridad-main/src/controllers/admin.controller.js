@@ -1,3 +1,4 @@
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const pool = require('../../database'); // Cliente PostgreSQL nativo
 const bcrypt=require('bcrypt')
 const {sendEmail}=require('../email/sendEmail')
@@ -699,21 +700,61 @@ const obtenerSolicitudesPendientes = async (req, res) => {
 const { v4: uuidv4 } = require('uuid'); // Para nombres de archivos únicos (opcional, o usa Date.now)
 
 // Helper de respuestas que creamos antes
+const s3Client = new S3Client({ region: 'us-east-1' }); 
+const BUCKET_NAME = 'glucotracker-bucket';
+const uploadToS3 = async (file, folderPath) => {
+  // Limpiamos el nombre original para evitar caracteres problemáticos en la URL
+  const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9.]/g, '_');
+  const fileName = `${folderPath}/${Date.now()}_${safeOriginalName}`;
 
+  const command = new PutObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: fileName,
+    Body: file.buffer,
+    ContentType: file.mimetype,
+  });
 
+  await s3Client.send(command);
+
+  // Construimos y retornamos la URL pública (ya que configuraste el bucket como público)
+  return `https://${BUCKET_NAME}.s3.${await s3Client.config.region()}.amazonaws.com/${fileName}`;
+};
+
+const deleteFromS3 = async (fileUrl) => {
+  if (!fileUrl) return;
+  try {
+    // Extraemos el 'Key' de la URL pública
+    const key = fileUrl.split('.amazonaws.com/')[1];
+    if (!key) return;
+
+    const command = new DeleteObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+    });
+    await s3Client.send(command);
+    console.log(`🗑️ Archivo revertido en S3: ${key}`);
+  } catch (err) {
+    console.error(`⚠️ No se pudo borrar el archivo de S3: ${fileUrl}`, err);
+  }
+};
 const activarCuenta = async (req, res) => {
+  // Arreglo para rastrear qué subimos y poder borrarlo si hay error
+  let archivosSubidos = []; 
+
   try {
     const { 
       id_usuario, 
       rol_seleccionado, 
-      administrador_id_admin = 1 // Por defecto 1 si no lo envías, idealmente sacarlo del token
+      administrador_id_admin = 1 
     } = req.body;
 
     if (!id_usuario || !rol_seleccionado) {
       return response(res, 'error', 400, 'Faltan datos críticos (id_usuario o rol)');
     }
 
-    // 1. Buscamos el ID del rol en el sistema
+    // INICIAMOS LA TRANSACCIÓN SQL
+    await pool.query('BEGIN');
+
     const { rows: rolRows } = await pool.query(
       `SELECT id_rol FROM roles WHERE nombre_rol ILIKE $1 LIMIT 1`,
       [rol_seleccionado]
@@ -729,13 +770,12 @@ const activarCuenta = async (req, res) => {
       const { id_medico, id_actividad, genero, peso, altura, enfermedad_id, tratamiento_id, dosis_, nombre_emergencia, numero_emergencia, embarazada, semanas } = req.body;
       
       const imgFiles = req.files?.foto_perfil;
-      if (!imgFiles || imgFiles.length === 0) return response(res, 'error', 400, 'Falta la foto de perfil extraída del PDF');
+      if (!imgFiles || imgFiles.length === 0) throw new Error('Falta la foto de perfil');
 
-      // Subir imagen (Comentado temporalmente para migración a AWS S3)
+      // Subir a S3 y registrar para posible rollback
+      const imgUrl = await uploadToS3(imgFiles[0], 'perfiles_pacientes');
+      archivosSubidos.push(imgUrl);
 
-      const imgUrl = "https://placeholder.url/perfil.jpg"; // FIXME: AWS S3
-
-      // Insertar Paciente
       const insertPacienteQuery = `
         INSERT INTO paciente (id_usuario, id_medico, id_nivel_actividad, genero, peso, altura, embarazo, nombre_emergencia, numero_emergencia, foto_perfil, administrador_id_admin)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -747,12 +787,10 @@ const activarCuenta = async (req, res) => {
 
       const id_paciente = pacienteData[0].id_paciente;
 
-      // Seguimiento embarazo
       if (embarazada === 'true' && semanas) {
         await pool.query(`INSERT INTO seguimiento_embarazo (id_paciente, semanas_embarazo) VALUES ($1, $2)`, [id_paciente, parseInt(semanas)]);
       }
 
-      // Enfermedades y Tratamientos
       if (enfermedad_id && tratamiento_id) {
         await pool.query(`INSERT INTO paciente_enfermedad (id_paciente, id_enfermedad) VALUES ($1, $2)`, [id_paciente, parseInt(enfermedad_id)]);
         await pool.query(`INSERT INTO tratamiento_enfermedad (id_paciente, id_tratamiento, dosis) VALUES ($1, $2, $3)`, [id_paciente, parseInt(tratamiento_id), dosis_]);
@@ -767,14 +805,15 @@ const activarCuenta = async (req, res) => {
       const pdfFiles = req.files?.matriculaProfesional;
       const carnetFiles = req.files?.carnetProfesional;
 
-      if (!pdfFiles || !carnetFiles) return response(res, 'error', 400, 'Faltan documentos profesionales (Matrícula o Carnet)');
+      if (!pdfFiles || !carnetFiles) throw new Error('Faltan documentos profesionales (Matrícula o Carnet)');
 
-      // Subir archivos (Comentado temporalmente para migración a AWS S3)
+      // Subir a S3 en paralelo y registrar
+      const [pdfUrl, imgUrl] = await Promise.all([
+        uploadToS3(pdfFiles[0], 'Matriculas_PDF'),
+        uploadToS3(carnetFiles[0], 'Carnets_IMG')
+      ]);
+      archivosSubidos.push(pdfUrl, imgUrl);
 
-      const pdfUrl = "https://placeholder.url/matricula.pdf"; // FIXME: AWS S3
-      const imgUrl = "https://placeholder.url/carnet.jpg"; // FIXME: AWS S3
-
-      // Insertar Médico
       const insertMedicoQuery = `
         INSERT INTO medico (id_usuario, id_especialidad, departamento, matricula_profesional, carnet_profesional, administrador_id_admin)
         VALUES ($1, $2, $3, $4, $5, $6)
@@ -785,27 +824,38 @@ const activarCuenta = async (req, res) => {
     // ==========================================
     // ACTIVACIÓN FINAL DE LA CUENTA
     // ==========================================
-    
-    // Asignar en matriz de permisos (RBAC) con upsert por si acaso
     await pool.query(
       `INSERT INTO usuario_rol (id_usuario, id_rol) VALUES ($1, $2) ON CONFLICT (id_usuario, id_rol) DO NOTHING`,
       [parseInt(id_usuario), id_rol]
     );
 
-    // Actualizar estado del usuario a Activo y cambiar su etiqueta de rol
     await pool.query(
       `UPDATE usuario SET estado = true, rol = $1 WHERE id_usuario = $2`,
       [rol_seleccionado, parseInt(id_usuario)]
     );
 
+    // SI TODO SALIÓ BIEN, GUARDAMOS LOS CAMBIOS EN BD
+    await pool.query('COMMIT');
+
     return response(res, 'success', 200, `Cuenta activada exitosamente como ${rol_seleccionado.toUpperCase()}`);
 
   } catch (error) {
-    console.error("❌ Error en activarCuenta:", error);
-    return response(res, 'error', 500, 'Error interno al procesar la activación: ' + error.message);
+    // SI HAY ERROR, DESHACEMOS LA BASE DE DATOS
+    await pool.query('ROLLBACK');
+    console.error("❌ Error en la transacción. Revirtiendo base de datos...");
+
+    // Y BORRAMOS LOS ARCHIVOS QUE SE HAYAN SUBIDO A S3
+    if (archivosSubidos.length > 0) {
+      console.log("🧹 Limpiando archivos huérfanos en S3...");
+      for (const url of archivosSubidos) {
+        await deleteFromS3(url);
+      }
+    }
+
+    console.error("❌ Error en activarCuenta:", error.message);
+    return response(res, 'error', 500, 'Error al procesar la activación: ' + error.message);
   }
 };
-
 const suspenderUsuario = async (req, res) => {
   const id_usuario = parseInt(req.params.id_usuario);
 
