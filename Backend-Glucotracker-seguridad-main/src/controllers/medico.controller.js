@@ -1,5 +1,7 @@
 const pool = require('../../database');
 const bcrypt = require('bcrypt');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+
 const response = (res, status, code, message, data = null) => {
   return res.status(code).json({
     status,
