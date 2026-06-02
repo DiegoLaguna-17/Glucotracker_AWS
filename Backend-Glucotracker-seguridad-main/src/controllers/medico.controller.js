@@ -525,17 +525,69 @@ const registrarGlucosaMedico = async (req, res) => {
     );
   }
 };
+
+const { v4: uuidv4 } = require('uuid'); // Para nombres de archivos únicos (opcional, o usa Date.now)
+
+// Helper de respuestas que creamos antes
+const s3Client = new S3Client({ region: 'us-east-1' }); 
+const BUCKET_NAME = 'glucotracker-bucket';
+const uploadToS3 = async (file, folderPath) => {
+  // Limpiamos el nombre original para evitar caracteres problemáticos en la URL
+  const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9.]/g, '_');
+  const fileName = `${folderPath}/${Date.now()}_${safeOriginalName}`;
+
+  const command = new PutObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: fileName,
+    Body: file.buffer,
+    ContentType: file.mimetype,
+  });
+
+  await s3Client.send(command);
+
+  // Construimos y retornamos la URL pública (ya que configuraste el bucket como público)
+  return `https://${BUCKET_NAME}.s3.${await s3Client.config.region()}.amazonaws.com/${fileName}`;
+};
+
+const deleteFromS3 = async (fileUrl) => {
+  if (!fileUrl) return;
+  try {
+    // Extraemos el 'Key' de la URL pública
+    const key = fileUrl.split('.amazonaws.com/')[1];
+    if (!key) return;
+
+    const command = new DeleteObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: key,
+    });
+    await s3Client.send(command);
+    console.log(`🗑️ Archivo revertido en S3: ${key}`);
+  } catch (err) {
+    console.error(`⚠️ No se pudo borrar el archivo de S3: ${fileUrl}`, err);
+  }
+};
+
+
 const actualizarMedico = async (req, res) => {
   const { id_medico } = req.params;
   const { telefono, correo, departamento } = req.body;
-  const carnetFile = req.file;
+  const carnetFile = req.file; // Asumiendo que usas .single('carnet') en tus rutas
+
+  let archivoSubido = null; // Rastrear el archivo para rollback en S3
 
   try {
+    // INICIAMOS LA TRANSACCIÓN SQL
+    await pool.query('BEGIN');
+
     // 1️⃣ Obtener id_usuario del médico para poder actualizar la tabla de usuarios
-    const { rows: medicoRows } = await pool.query(`SELECT id_usuario FROM medico WHERE id_medico = $1`, [id_medico]);
+    const { rows: medicoRows } = await pool.query(
+      `SELECT id_usuario FROM medico WHERE id_medico = $1`, 
+      [id_medico]
+    );
     const medico = medicoRows[0];
 
     if (!medico) {
+      await pool.query('ROLLBACK');
       return response(res, 'error', 404, 'Médico no encontrado en el sistema');
     }
 
@@ -543,20 +595,19 @@ const actualizarMedico = async (req, res) => {
 
     // 2️⃣ Preparar objetos de actualización dinámicos
     const usuarioUpdates = {};
-    if (telefono !== undefined) usuarioUpdates["teléfono"] = telefono;
+    if (telefono !== undefined) usuarioUpdates["teléfono"] = telefono; // Mantengo la tilde según tu código original
     if (correo !== undefined) usuarioUpdates.correo = correo;
 
     const medicoUpdates = {};
     if (departamento !== undefined) medicoUpdates.departamento = departamento;
 
-    // 3️⃣ Gestión del archivo (Carnet Profesional) (Comentado para migración a AWS S3)
+    // 3️⃣ Gestión del archivo (Carnet Profesional) con AWS S3
     if (carnetFile) {
-      // Generamos un nombre único para evitar sobreescritura accidental
-      const extension = carnetFile.originalname.split('.').pop();
-      const fileName = `carnet-${id_usuario}-${Date.now()}.${extension}`;
+      // Subir a S3 y registrar para posible rollback
+      const imgUrl = await uploadToS3(carnetFile, 'Carnets_IMG');
+      archivoSubido = imgUrl;
       
-
-      medicoUpdates.carnet_profesional = "https://placeholder.url/carnet.jpg"; // FIXME: AWS S3
+      medicoUpdates.carnet_profesional = imgUrl;
     }
 
     // 4️⃣ Ejecutar actualizaciones en la tabla 'usuario'
@@ -564,7 +615,10 @@ const actualizarMedico = async (req, res) => {
       const keys = Object.keys(usuarioUpdates);
       const values = keys.map(k => usuarioUpdates[k]);
       const setClause = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ');
-      await pool.query(`UPDATE usuario SET ${setClause} WHERE id_usuario = $${keys.length + 1}`, [...values, id_usuario]);
+      await pool.query(
+        `UPDATE usuario SET ${setClause} WHERE id_usuario = $${keys.length + 1}`, 
+        [...values, id_usuario]
+      );
     }
 
     // 5️⃣ Ejecutar actualizaciones en la tabla 'medico'
@@ -572,8 +626,14 @@ const actualizarMedico = async (req, res) => {
       const keys = Object.keys(medicoUpdates);
       const values = keys.map(k => medicoUpdates[k]);
       const setClause = keys.map((k, i) => `"${k}" = $${i + 1}`).join(', ');
-      await pool.query(`UPDATE medico SET ${setClause} WHERE id_medico = $${keys.length + 1}`, [...values, id_medico]);
+      await pool.query(
+        `UPDATE medico SET ${setClause} WHERE id_medico = $${keys.length + 1}`, 
+        [...values, id_medico]
+      );
     }
+
+    // SI TODO SALIÓ BIEN, GUARDAMOS LOS CAMBIOS EN BD
+    await pool.query('COMMIT');
 
     // 6️⃣ Respuesta exitosa estandarizada
     return response(res, 'success', 200, 'Los datos del médico se actualizaron correctamente', {
@@ -584,6 +644,20 @@ const actualizarMedico = async (req, res) => {
     });
 
   } catch (error) {
+    // SI HAY ERROR, DESHACEMOS LA BASE DE DATOS
+    await pool.query('ROLLBACK');
+    console.error('❌ Error en la transacción. Revirtiendo base de datos...');
+    
+    // BORRAMOS EL ARCHIVO HUÉRFANO DE S3 SI SE SUBIÓ
+    if (archivoSubido) {
+      console.log("🧹 Limpiando archivo huérfano en S3...");
+      try {
+        await deleteFromS3(archivoSubido);
+      } catch (s3Error) {
+        console.error("❌ Error al intentar borrar de S3:", s3Error.message);
+      }
+    }
+
     console.error('Error en actualizarMedico:', error.message);
     
     return response(
@@ -595,7 +669,6 @@ const actualizarMedico = async (req, res) => {
     );
   }
 };
-
 // ✅ export correcto
 module.exports = {
   verMedicos,
