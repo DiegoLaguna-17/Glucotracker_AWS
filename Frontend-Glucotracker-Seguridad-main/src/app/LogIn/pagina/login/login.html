@@ -70,7 +70,7 @@
       </label>
 
         <button class="btn-login" type="submit" [disabled]="!canSubmit()">
-          {{ loading() ? 'Ingresando…' : buttonText() }}
+          {{ loadingLogin() ? 'Ingresando…' : buttonText() }}
         </button>
 
         <button
@@ -126,14 +126,14 @@
   </div>
 </div>
 
-<!-- Modal de éxito -->
+<!-- Modal de éxito (Dinámico) -->
 <div class="modal-overlay" *ngIf="showSuccessModal()">
   <div class="modal modal--success">
     <div class="modal-body">
       <div class="success-icon">✓</div>
-      <h2 class="modal-title">¡Inicio de Sesión Exitoso!</h2>
+      <h2 class="modal-title">{{ successTitle() }}</h2>
       <p class="modal-description">
-        Serás redirigido a tu panel
+        {{ successMessage() }}
       </p>
       <div class="modal-actions">
       </div>
@@ -141,11 +141,11 @@
   </div>
 </div>
 
-<!-- Modal de error -->
+<!-- Modal de error (Dinámico) -->
 <div class="modal-overlay" *ngIf="showErrorModal()">
   <div class="modal modal--error">
     <div class="modal-header">
-      <h2 class="modal-title">Error de Inicio de Sesión</h2>
+      <h2 class="modal-title">{{ errorTitle() }}</h2>
       <button class="modal-close" (click)="closeErrorModal()">×</button>
     </div>
     
@@ -199,8 +199,8 @@
         <input type="email" placeholder="tucorreo@ejemplo.com" class="verification-input" style="letter-spacing: normal; width: 100%; text-align: left;" #recoverEmailInput />
       </div>
       <div class="modal-actions">
-        <button type="button" class="btn-modal btn-modal--primary" (click)="solicitarRecuperacion(recoverEmailInput)" [disabled]="loading()">
-          {{ loading() ? 'Enviando…' : 'Enviar Código' }}
+        <button type="button" class="btn-modal btn-modal--primary" (click)="solicitarRecuperacion(recoverEmailInput)" [disabled]="loadingRecover()">
+          {{ loadingRecover() ? 'Enviando…' : 'Enviar Código' }}
         </button>
       </div>
     </div>
@@ -269,8 +269,8 @@
       <div class="error-icon" style="color: #f44336; font-size: 3rem; text-align: center; margin-bottom: 1rem;">!</div>
       <p class="modal-description">Tu cuenta ha sido bloqueada por múltiples intentos fallidos. Puedes solicitar un código de desbloqueo a tu correo registrado.</p>
       <div class="modal-actions">
-        <button type="button" class="btn-modal btn-modal--primary" (click)="solicitarDesbloqueo()" [disabled]="loading()">
-          {{ loading() ? 'Enviando…' : 'Solicitar Desbloqueo' }}
+        <button type="button" class="btn-modal btn-modal--primary" (click)="solicitarDesbloqueo()" [disabled]="loadingUnlock()">
+          {{ loadingUnlock() ? 'Enviando…' : 'Solicitar Desbloqueo' }}
         </button>
       </div>
     </div>

@@ -24,6 +24,19 @@ export class Login implements OnInit {
   private fb = new FormBuilder();
   loading = signal(false);
 
+  loadingLogin = signal(false);
+  loadingVerify = signal(false);
+  loadingRecover = signal(false);
+  loadingUnlock = signal(false);
+
+  showSuccessModal = signal(false);
+  successTitle = signal('¡Operación Exitosa!');
+  successMessage = signal('');
+
+  showErrorModal = signal(false);
+  errorTitle = signal('Error');
+  errorMessage = signal('');
+
   // ==================== NUEVAS VARIABLES PARA RETRASO PROGRESIVO ====================
   // Contador de intentos fallidos de LOGIN (credenciales incorrectas)
   private failedLoginAttempts = 0;
@@ -46,9 +59,10 @@ export class Login implements OnInit {
 
   // Variables para los modales
   showVerificationModal = signal(false);
+  /*
   showSuccessModal = signal(false);
   showErrorModal = signal(false);
-  errorMessage = signal('');
+  errorMessage = signal('');*/
   showPassword = signal(false);
 
   togglePassword() {
@@ -316,6 +330,8 @@ export class Login implements OnInit {
         }
 
         this.showVerificationModal.set(false);
+        this.successTitle.set('¡Inicio de Sesión Exitoso!');
+        this.successMessage.set('Serás redirigido a tu panel');
         this.showSuccessModal.set(true);
 
         setTimeout(() => {
@@ -337,7 +353,10 @@ export class Login implements OnInit {
         
         // NUEVO: Usar el manejador de errores de código
         this.handleCodeVerificationError(err.error?.message || 'Código incorrecto o expirado');
-      }
+        this.errorTitle.set('Error de Inicio de Sesión'); // O 'Cuenta Bloqueada', 'Contraseña Expirada', etc.
+        this.errorMessage.set(err.error?.message || 'Error al conectar con el servidor');
+        this.showErrorModal.set(true);
+              }
     });
   }
 
@@ -420,6 +439,8 @@ export class Login implements OnInit {
     ).subscribe({
       next: (res) => {
         this.showRecoverPasswordModal.set(false);
+        this.successTitle.set('¡Contraseña Actualizada!');
+        this.successMessage.set('Tu contraseña ha sido cambiada con éxito. Ya puedes iniciar sesión.');
         this.showSuccessModal.set(true);
         this.recoverForm.reset();
         this.recoverJwtToken = '';
@@ -512,6 +533,8 @@ export class Login implements OnInit {
     }).subscribe({
       next: (res) => {
         this.showUnlockCodeModal.set(false);
+        this.successTitle.set('¡Cuenta Desbloqueada!');
+        this.successMessage.set('Tu cuenta ha sido reactivada. Ya puedes ingresar.');
         this.showSuccessModal.set(true);
         setTimeout(() => this.showSuccessModal.set(false), 3000);
         this.loading.set(false);
